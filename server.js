@@ -146,14 +146,17 @@ async function startWhatsApp() {
 
   const msg = messages?.[0];
   if (!msg?.message) return;
-
   if (msg.key.fromMe) return;
-  if (msg.key.remoteJid === "status@broadcast") return;
+
+  const jid = msg.key.remoteJid;
+
+  if (jid === "status@broadcast") return;
   if (msg.message.protocolMessage) return;
   if (msg.message.senderKeyDistributionMessage) return;
-  if (msg.message.messageContextInfo) return;
 
-  const from = msg.key.remoteJid;
+  const isGroup = jid.endsWith("@g.us");
+
+  const sender = isGroup ? msg.key.participant : jid;
 
   const text =
     msg.message.conversation ||
@@ -163,18 +166,18 @@ async function startWhatsApp() {
     msg.message.documentMessage?.caption ||
     "";
 
-  if (!text) {
-    console.log("Mensagem recebida sem texto/anexo:", from);
-    return;
+  if (!text) return;
+
+  if (isGroup) {
+    console.log("Mensagem de GRUPO recebida:");
+    console.log("Grupo:", jid);
+    console.log("Quem enviou:", sender);
+    console.log("Mensagem:", text);
+  } else {
+    console.log("Mensagem de CLIENTE recebida:");
+    console.log("Cliente:", jid);
+    console.log("Mensagem:", text);
   }
-
-  console.log("Mensagem REAL recebida:", from, text);
-
-  io.emit("new-message", {
-    from,
-    text,
-    timestamp: new Date().toISOString()
-  });
 });
 
   } catch (error) {
