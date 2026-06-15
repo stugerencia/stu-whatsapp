@@ -21,6 +21,8 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
 
