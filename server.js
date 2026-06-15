@@ -4,11 +4,14 @@ import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
 
-import makeWASocket, {
+import baileys from "@whiskeysockets/baileys";
+
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason
-} from "@whiskeysockets/baileys";
+} = baileys;
 
 const app = express();
 const server = http.createServer(app);
