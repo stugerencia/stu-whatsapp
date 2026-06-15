@@ -26,6 +26,17 @@ let sock;
 let lastQr = null;
 let connectionStatus = "iniciando";
 
+let clientConversations = [];
+let groupConversations = [];
+
+app.get("/clientes", (req, res) => {
+  res.json(clientConversations);
+});
+
+app.get("/grupos", (req, res) => {
+  res.json(groupConversations);
+});
+
 app.get("/", (req, res) => {
   res.send(`
     <html>
@@ -141,7 +152,7 @@ async function startWhatsApp() {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+sock.ev.on("messages.upsert", async ({ messages, type }) => {
   if (type !== "notify") return;
 
   const msg = messages?.[0];
@@ -168,18 +179,70 @@ async function startWhatsApp() {
 
   if (!text) return;
 
+  const newMessage = {
+    id: Date.now(),
+    jid,
+    sender,
+    text,
+    direction: "received",
+    date: new Date().toISOString(),
+    read: false
+  };
+
   if (isGroup) {
-    console.log("Mensagem de GRUPO recebida:");
+    let groupChat = groupConversations.find(c => c.jid === jid);
+
+    if (!groupChat) {
+      groupChat = {
+        id: Date.now(),
+        jid,
+        name: jid,
+        type: "grupo_operacional",
+        status: "monitorando",
+        messages: [],
+        createdAt: new Date().toISOString()
+      };
+
+      groupConversations.push(groupChat);
+    }
+
+    groupChat.messages.push(newMessage);
+    groupChat.lastMessage = text;
+    groupChat.lastMessageAt = new Date().toISOString();
+
+    console.log("Mensagem de GRUPO salva:");
     console.log("Grupo:", jid);
     console.log("Quem enviou:", sender);
     console.log("Mensagem:", text);
+
   } else {
-    console.log("Mensagem de CLIENTE recebida:");
+    let clientChat = clientConversations.find(c => c.jid === jid);
+
+    if (!clientChat) {
+      clientChat = {
+        id: Date.now(),
+        jid,
+        name: jid.replace("@s.whatsapp.net", "").replace("@lid", ""),
+        type: "cliente",
+        status: "nova",
+        attendant: null,
+        messages: [],
+        createdAt: new Date().toISOString()
+      };
+
+      clientConversations.push(clientChat);
+    }
+
+    clientChat.messages.push(newMessage);
+    clientChat.lastMessage = text;
+    clientChat.lastMessageAt = new Date().toISOString();
+
+    console.log("Mensagem de CLIENTE salva:");
     console.log("Cliente:", jid);
     console.log("Mensagem:", text);
   }
 });
-
+    
   } catch (error) {
     console.error("Erro ao iniciar WhatsApp:", error);
     connectionStatus = "Erro ao iniciar WhatsApp. Veja os logs.";
