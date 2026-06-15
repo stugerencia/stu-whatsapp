@@ -206,6 +206,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
       };
 
       groupConversations.push(groupChat);
+      console.log("NOVO GRUPO CRIADO. TOTAL:", groupConversations.length);
     }
 
     groupChat.messages.push(newMessage);
@@ -233,6 +234,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
       };
 
       clientConversations.push(clientChat);
+      console.log("NOVO CLIENTE CRIADO. TOTAL:", clientConversations.length);
     }
 
     clientChat.messages.push(newMessage);
