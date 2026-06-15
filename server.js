@@ -41,6 +41,42 @@ app.get("/grupos", (req, res) => {
   res.json(groupConversations);
 });
 
+app.post("/enviar", async (req, res) => {
+  try {
+    const { jid, mensagem } = req.body;
+
+    if (!jid || !mensagem) {
+      return res.status(400).json({
+        erro: "Informe jid e mensagem"
+      });
+    }
+
+    if (!sock) {
+      return res.status(503).json({
+        erro: "WhatsApp ainda não iniciado"
+      });
+    }
+
+    await sock.sendMessage(jid, {
+      text: mensagem
+    });
+
+    res.json({
+      sucesso: true,
+      jid,
+      mensagem
+    });
+
+  } catch (error) {
+    console.error("Erro ao enviar mensagem:", error);
+
+    res.status(500).json({
+      erro: "Erro ao enviar mensagem",
+      detalhe: error.message
+    });
+  }
+});
+
 app.get("/", (req, res) => {
   res.send(`
     <html>
