@@ -1,62 +1,168 @@
-// server.js — Instale: npm install @whiskeysockets/baileys express ws qrcode cors
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const express = require('express');
-const { WebSocketServer } = require('ws');
-const QRCode = require('qrcode');
-const cors = require('cors');
-const http = require('http');
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import QRCode from "qrcode";
+import pino from "pino";
+
+import makeWASocket, {
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  DisconnectReason
+} from "@whiskeysockets/baileys";
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
 
-let sock = null, qrBase64 = null, connStatus = 'disconnected';
-const clients = new Set();
+const PORT = process.env.PORT || 3000;
+const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
 
-wss.on('connection', ws => { clients.add(ws); ws.on('close', () => clients.delete(ws)); });
-function broadcast(data) { clients.forEach(c => c.readyState === 1 && c.send(JSON.stringify(data))); }
+let sock;
+let lastQr = null;
+let connectionStatus = "iniciando";
 
-async function startWA() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth');
-  sock = makeWASocket({ auth: state, printQRInTerminal: false });
-  sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) { qrBase64 = await QRCode.toDataURL(qr); connStatus = 'connecting'; broadcast({ type: 'qr', qr: qrBase64 }); }
-    if (connection === 'open') { connStatus = 'connected'; qrBase64 = null; broadcast({ type: 'status', status: 'connected' }); }
-    if (connection === 'close') {
-      connStatus = 'disconnected';
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) setTimeout(startWA, 3000);
-      broadcast({ type: 'status', status: 'disconnected' });
+app.get("/", (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>STU WhatsApp</title>
+        <style>
+          body { font-family: Arial; background:#f4f7fb; padding:40px; }
+          .card { background:white; padding:30px; border-radius:16px; max-width:520px; margin:auto; box-shadow:0 10px 30px #0001; text-align:center; }
+          img { max-width:280px; margin:20px auto; display:block; }
+          .status { font-size:18px; font-weight:bold; margin:20px; }
+          button { padding:12px 18px; border:0; border-radius:10px; background:#1f8f5f; color:white; cursor:pointer; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>STU WhatsApp - QR Code</h2>
+          <div class="status" id="status">Carregando...</div>
+          <div id="qr"></div>
+          <button onclick="location.reload()">Atualizar</button>
+        </div>
+
+        <script src="/socket.io/socket.io.js"></script>
+        <script>
+          const socket = io();
+
+          socket.on("status", data => {
+            document.getElementById("status").innerText = data.status;
+          });
+
+          socket.on("qr", data => {
+            document.getElementById("qr").innerHTML = '<img src="' + data.qrImage + '" />';
+          });
+
+          socket.emit("get-current");
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+io.on("connection", (client) => {
+  client.emit("status", { status: connectionStatus });
+
+  if (lastQr) {
+    client.emit("qr", { qrImage: lastQr });
+  }
+
+  client.on("get-current", () => {
+    client.emit("status", { status: connectionStatus });
+
+    if (lastQr) {
+      client.emit("qr", { qrImage: lastQr });
     }
   });
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    for (const msg of messages) {
-      if (msg.key.fromMe) continue;
-      const phone = msg.key.remoteJid.replace('@s.whatsapp.net','').replace('@g.us','');
-      const name = msg.pushName || phone;
-      const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-      broadcast({ type: 'message', phone, name, text, time: new Date().toISOString() });
-    }
-  });
+});
+
+async function startWhatsApp() {
+  try {
+    connectionStatus = "Conectando ao WhatsApp...";
+    io.emit("status", { status: connectionStatus });
+
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+    const { version } = await fetchLatestBaileysVersion();
+
+    sock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: "info" }),
+      browser: ["STU Atendimento", "Chrome", "1.0.0"],
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+      printQRInTerminal: false
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        console.log("QR gerado.");
+        connectionStatus = "QR Code gerado. Escaneie no WhatsApp.";
+        lastQr = await QRCode.toDataURL(qr);
+        io.emit("status", { status: connectionStatus });
+        io.emit("qr", { qrImage: lastQr });
+      }
+
+      if (connection === "open") {
+        console.log("WhatsApp conectado com sucesso.");
+        connectionStatus = "🟢 WhatsApp conectado";
+        lastQr = null;
+        io.emit("status", { status: connectionStatus });
+        io.emit("qr", { qrImage: "" });
+      }
+
+      if (connection === "close") {
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        console.log("Conexão fechada. Código:", statusCode);
+
+        if (statusCode === DisconnectReason.loggedOut) {
+          connectionStatus = "🔴 Sessão encerrada. Apague o volume/auth e gere novo QR.";
+          io.emit("status", { status: connectionStatus });
+          return;
+        }
+
+        connectionStatus = "Reconectando...";
+        io.emit("status", { status: connectionStatus });
+
+        setTimeout(() => {
+          startWhatsApp();
+        }, 5000);
+      }
+    });
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+      const msg = messages?.[0];
+      if (!msg?.message) return;
+
+      const from = msg.key.remoteJid;
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        "[mensagem não textual]";
+
+      console.log("Mensagem recebida:", from, text);
+    });
+
+  } catch (error) {
+    console.error("Erro ao iniciar WhatsApp:", error);
+    connectionStatus = "Erro ao iniciar WhatsApp. Veja os logs.";
+    io.emit("status", { status: connectionStatus });
+
+    setTimeout(() => {
+      startWhatsApp();
+    }, 10000);
+  }
 }
 
-app.get('/status', (req, res) => res.json({ status: connStatus, qr: qrBase64 }));
-app.get('/qr', (req, res) => res.json({ qr: qrBase64 }));
-app.post('/send-message', async (req, res) => {
-  const { phone, message } = req.body;
-  if (!sock || connStatus !== 'connected') return res.status(503).json({ error: 'Not connected' });
-  await sock.sendMessage(phone + '@s.whatsapp.net', { text: message });
-  res.json({ ok: true });
+server.listen(PORT, () => {
+  console.log("Servidor rodando na porta", PORT);
+  startWhatsApp();
 });
-app.post('/disconnect', async (req, res) => {
-  await sock?.logout();
-  connStatus = 'disconnected';
-  res.json({ ok: true });
-});
-
-startWA();
-server.listen(process.env.PORT || 3001, () => console.log('Server running'));
