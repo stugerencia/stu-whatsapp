@@ -4,6 +4,8 @@ import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
 
+console.log("######## STU VERSAO NOVA TESTE 001 ########");
+
 import baileys from "@whiskeysockets/baileys";
 
 const {
