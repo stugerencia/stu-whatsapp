@@ -141,18 +141,41 @@ async function startWhatsApp() {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-      const msg = messages?.[0];
-      if (!msg?.message) return;
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  if (type !== "notify") return;
 
-      const from = msg.key.remoteJid;
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        "[mensagem não textual]";
+  const msg = messages?.[0];
+  if (!msg?.message) return;
 
-      console.log("Mensagem recebida:", from, text);
-    });
+  if (msg.key.fromMe) return;
+  if (msg.key.remoteJid === "status@broadcast") return;
+  if (msg.message.protocolMessage) return;
+  if (msg.message.senderKeyDistributionMessage) return;
+  if (msg.message.messageContextInfo) return;
+
+  const from = msg.key.remoteJid;
+
+  const text =
+    msg.message.conversation ||
+    msg.message.extendedTextMessage?.text ||
+    msg.message.imageMessage?.caption ||
+    msg.message.videoMessage?.caption ||
+    msg.message.documentMessage?.caption ||
+    "";
+
+  if (!text) {
+    console.log("Mensagem recebida sem texto/anexo:", from);
+    return;
+  }
+
+  console.log("Mensagem REAL recebida:", from, text);
+
+  io.emit("new-message", {
+    from,
+    text,
+    timestamp: new Date().toISOString()
+  });
+});
 
   } catch (error) {
     console.error("Erro ao iniciar WhatsApp:", error);
