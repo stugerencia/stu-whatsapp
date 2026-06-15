@@ -54,7 +54,7 @@ app.get("/", (req, res) => {
       </head>
       <body>
         <div class="card">
-          <h2>STU WhatsApp - QR Code</h2>
+          <h2>STU WhatsApp - VERSÃO NOVA 001</h2>
           <div class="status" id="status">Carregando...</div>
           <div id="qr"></div>
           <button onclick="location.reload()">Atualizar</button>
