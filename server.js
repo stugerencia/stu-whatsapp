@@ -43,6 +43,7 @@ app.get("/grupos", (req, res) => {
 
 app.get("/enviar", async (req, res) => {
   try {
+    console.log("######## ENTROU NO ENDPOINT ENVIAR ########");
     const { jid, mensagem } = req.body;
 
     if (!jid || !mensagem) {
