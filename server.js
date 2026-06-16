@@ -41,11 +41,10 @@ app.get("/grupos", (req, res) => {
   res.json(groupConversations);
 });
 
-app.get("/enviar", async (req, res) => {
+app.post("/enviar", async (req, res) => {
   try {
     console.log("######## ENTROU NO ENDPOINT ENVIAR ########");
-    const jid = req.query.jid;
-const mensagem = req.query.mensagem;
+    const { jid, mensagem } = req.body;
 
     if (!jid || !mensagem) {
       return res.status(400).json({
