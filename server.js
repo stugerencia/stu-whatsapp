@@ -3,9 +3,6 @@ import http from "http";
 import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
-
-console.log("######## STU VERSAO NOVA TESTE 002 ENVIAR ########");
-
 import baileys from "@whiskeysockets/baileys";
 
 const {
@@ -15,13 +12,24 @@ const {
   DisconnectReason
 } = baileys;
 
+console.log("######## STU ATENDIMENTO WHATSAPP ########");
+
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: { origin: "*" }
 });
 
 app.use(express.json());
+
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
 
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
@@ -33,6 +41,77 @@ let connectionStatus = "iniciando";
 let clientConversations = [];
 let groupConversations = [];
 
+function getOrCreateConversation(jid, isGroup) {
+  if (isGroup) {
+    let groupChat = groupConversations.find(c => c.jid === jid);
+
+    if (!groupChat) {
+      groupChat = {
+        id: Date.now(),
+        jid,
+        name: jid,
+        type: "grupo_operacional",
+        status: "monitorando",
+        messages: [],
+        createdAt: new Date().toISOString()
+      };
+
+      groupConversations.push(groupChat);
+    }
+
+    return groupChat;
+  }
+
+  let clientChat = clientConversations.find(c => c.jid === jid);
+
+  if (!clientChat) {
+    clientChat = {
+      id: Date.now(),
+      jid,
+      name: jid.replace("@s.whatsapp.net", "").replace("@lid", ""),
+      type: "cliente",
+      status: "nova",
+      attendant: null,
+      messages: [],
+      createdAt: new Date().toISOString()
+    };
+
+    clientConversations.push(clientChat);
+  }
+
+  return clientChat;
+}
+
+function saveMessage({ jid, sender, text, direction }) {
+  const isGroup = jid.endsWith("@g.us");
+  const chat = getOrCreateConversation(jid, isGroup);
+
+  const newMessage = {
+    id: Date.now(),
+    jid,
+    sender,
+    text,
+    direction,
+    date: new Date().toISOString(),
+    read: direction === "sent"
+  };
+
+  chat.messages.push(newMessage);
+  chat.lastMessage = text;
+  chat.lastMessageAt = newMessage.date;
+
+  return newMessage;
+}
+
+app.get("/status", (req, res) => {
+  res.json({
+    status: connectionStatus,
+    whatsappConectado: !!sock,
+    clientes: clientConversations.length,
+    grupos: groupConversations.length
+  });
+});
+
 app.get("/clientes", (req, res) => {
   res.json(clientConversations);
 });
@@ -43,7 +122,6 @@ app.get("/grupos", (req, res) => {
 
 app.post("/enviar", async (req, res) => {
   try {
-    console.log("######## ENTROU NO ENDPOINT ENVIAR ########");
     const { jid, mensagem } = req.body;
 
     if (!jid || !mensagem) {
@@ -60,6 +138,13 @@ app.post("/enviar", async (req, res) => {
 
     await sock.sendMessage(jid, {
       text: mensagem
+    });
+
+    saveMessage({
+      jid,
+      sender: "sistema",
+      text: mensagem,
+      direction: "sent"
     });
 
     res.json({
@@ -93,7 +178,7 @@ app.get("/", (req, res) => {
       </head>
       <body>
         <div class="card">
-          <h2>STU WhatsApp - VERSÃO NOVA 001</h2>
+          <h2>STU Atendimento WhatsApp</h2>
           <div class="status" id="status">Carregando...</div>
           <div id="qr"></div>
           <button onclick="location.reload()">Atualizar</button>
@@ -108,7 +193,7 @@ app.get("/", (req, res) => {
           });
 
           socket.on("qr", data => {
-            document.getElementById("qr").innerHTML = '<img src="' + data.qrImage + '" />';
+            document.getElementById("qr").innerHTML = data.qrImage ? '<img src="' + data.qrImage + '" />' : '';
           });
 
           socket.emit("get-current");
@@ -140,13 +225,12 @@ async function startWhatsApp() {
     io.emit("status", { status: connectionStatus });
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
       version,
       auth: state,
-      logger: pino({ level: "info" }),
+      logger: pino({ level: "warn" }),
       browser: ["STU Atendimento", "Chrome", "1.0.0"],
       syncFullHistory: false,
       markOnlineOnConnect: false,
@@ -193,99 +277,44 @@ async function startWhatsApp() {
       }
     });
 
-sock.ev.on("messages.upsert", async ({ messages, type }) => {
-  if (type !== "notify") return;
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type !== "notify") return;
 
-  const msg = messages?.[0];
-  if (!msg?.message) return;
-  if (msg.key.fromMe) return;
+      const msg = messages?.[0];
+      if (!msg?.message) return;
+      if (msg.key.fromMe) return;
 
-  const jid = msg.key.remoteJid;
+      const jid = msg.key.remoteJid;
 
-  if (jid === "status@broadcast") return;
-  if (msg.message.protocolMessage) return;
-  if (msg.message.senderKeyDistributionMessage) return;
+      if (jid === "status@broadcast") return;
+      if (msg.message.protocolMessage) return;
+      if (msg.message.senderKeyDistributionMessage) return;
 
-  const isGroup = jid.endsWith("@g.us");
+      const isGroup = jid.endsWith("@g.us");
+      const sender = isGroup ? msg.key.participant : jid;
 
-  const sender = isGroup ? msg.key.participant : jid;
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        msg.message.videoMessage?.caption ||
+        msg.message.documentMessage?.caption ||
+        "";
 
-  const text =
-    msg.message.conversation ||
-    msg.message.extendedTextMessage?.text ||
-    msg.message.imageMessage?.caption ||
-    msg.message.videoMessage?.caption ||
-    msg.message.documentMessage?.caption ||
-    "";
+      if (!text) return;
 
-  if (!text) return;
-
-  const newMessage = {
-    id: Date.now(),
-    jid,
-    sender,
-    text,
-    direction: "received",
-    date: new Date().toISOString(),
-    read: false
-  };
-
-  if (isGroup) {
-    let groupChat = groupConversations.find(c => c.jid === jid);
-
-    if (!groupChat) {
-      groupChat = {
-        id: Date.now(),
+      saveMessage({
         jid,
-        name: jid,
-        type: "grupo_operacional",
-        status: "monitorando",
-        messages: [],
-        createdAt: new Date().toISOString()
-      };
+        sender,
+        text,
+        direction: "received"
+      });
 
-      groupConversations.push(groupChat);
-      console.log("NOVO GRUPO CRIADO. TOTAL:", groupConversations.length);
-    }
+      console.log(isGroup ? "Mensagem de GRUPO salva:" : "Mensagem de CLIENTE salva:");
+      console.log("JID:", jid);
+      console.log("Mensagem:", text);
+    });
 
-    groupChat.messages.push(newMessage);
-    groupChat.lastMessage = text;
-    groupChat.lastMessageAt = new Date().toISOString();
-
-    console.log("Mensagem de GRUPO salva:");
-    console.log("Grupo:", jid);
-    console.log("Quem enviou:", sender);
-    console.log("Mensagem:", text);
-
-  } else {
-    let clientChat = clientConversations.find(c => c.jid === jid);
-
-    if (!clientChat) {
-      clientChat = {
-        id: Date.now(),
-        jid,
-        name: jid.replace("@s.whatsapp.net", "").replace("@lid", ""),
-        type: "cliente",
-        status: "nova",
-        attendant: null,
-        messages: [],
-        createdAt: new Date().toISOString()
-      };
-
-      clientConversations.push(clientChat);
-      console.log("NOVO CLIENTE CRIADO. TOTAL:", clientConversations.length);
-    }
-
-    clientChat.messages.push(newMessage);
-    clientChat.lastMessage = text;
-    clientChat.lastMessageAt = new Date().toISOString();
-
-    console.log("Mensagem de CLIENTE salva:");
-    console.log("Cliente:", jid);
-    console.log("Mensagem:", text);
-  }
-});
-    
   } catch (error) {
     console.error("Erro ao iniciar WhatsApp:", error);
     connectionStatus = "Erro ao iniciar WhatsApp. Veja os logs.";
