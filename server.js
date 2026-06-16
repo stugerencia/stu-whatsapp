@@ -41,7 +41,7 @@ app.get("/grupos", (req, res) => {
   res.json(groupConversations);
 });
 
-app.post("/enviar", async (req, res) => {
+app.get("/enviar", async (req, res) => {
   try {
     const { jid, mensagem } = req.body;
 
