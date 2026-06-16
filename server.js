@@ -15,14 +15,11 @@ const {
   downloadMediaMessage
 } = baileys;
 
-console.log("######## STU ATENDIMENTO WHATSAPP V4 ########");
+console.log("######## STU ATENDIMENTO WHATSAPP V5 ########");
 
 const app = express();
 const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(express.json({ limit: "80mb" }));
 
@@ -35,8 +32,10 @@ app.use((req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
+const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
+const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
 
 let sock;
 let lastQr = null;
@@ -46,6 +45,21 @@ let manualDisconnect = false;
 let clientConversations = [];
 let groupConversations = [];
 
+let lidToPhone = {};
+let phoneToLid = {};
+
+function isGroupJid(jid = "") {
+  return jid.endsWith("@g.us");
+}
+
+function isPhoneJid(jid = "") {
+  return jid.endsWith("@s.whatsapp.net");
+}
+
+function isLidJid(jid = "") {
+  return jid.endsWith("@lid");
+}
+
 function cleanJid(jid = "") {
   return jid
     .replace("@s.whatsapp.net", "")
@@ -53,26 +67,8 @@ function cleanJid(jid = "") {
     .replace("@lid", "");
 }
 
-function isGroupJid(jid = "") {
-  return jid.endsWith("@g.us");
-}
-
-function getRealPhoneFromJid(jid = "") {
-  if (jid.endsWith("@s.whatsapp.net")) {
-    return cleanJid(jid);
-  }
-  return null;
-}
-
-function getWhatsappId(jid = "") {
-  return jid;
-}
-
-function getLid(jid = "") {
-  if (jid.endsWith("@lid")) {
-    return cleanJid(jid);
-  }
-  return null;
+function normalizePhone(phone = "") {
+  return String(phone).replace(/\D/g, "");
 }
 
 function getMessageType(message = {}) {
@@ -96,8 +92,112 @@ function getTextFromMessage(message = {}) {
   );
 }
 
-async function ensureMediaDir() {
+async function ensureDirs() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(MEDIA_DIR, { recursive: true });
+}
+
+async function loadLidMap() {
+  try {
+    await ensureDirs();
+    const raw = await fs.readFile(LID_MAP_FILE, "utf-8");
+    const data = JSON.parse(raw);
+    lidToPhone = data.lidToPhone || {};
+    phoneToLid = data.phoneToLid || {};
+    console.log("Mapa LID carregado:", Object.keys(lidToPhone).length);
+  } catch {
+    lidToPhone = {};
+    phoneToLid = {};
+  }
+}
+
+async function saveLidMap() {
+  try {
+    await ensureDirs();
+    await fs.writeFile(
+      LID_MAP_FILE,
+      JSON.stringify({ lidToPhone, phoneToLid }, null, 2)
+    );
+  } catch (error) {
+    console.error("Erro ao salvar mapa LID:", error);
+  }
+}
+
+async function mapLidToPhone(lidJid, phoneJid) {
+  if (!isLidJid(lidJid) || !isPhoneJid(phoneJid)) return;
+
+  const lid = cleanJid(lidJid);
+  const phone = normalizePhone(cleanJid(phoneJid));
+
+  if (!lid || !phone) return;
+
+  lidToPhone[lid] = phone;
+  phoneToLid[phone] = lid;
+
+  await saveLidMap();
+
+  clientConversations.forEach(c => {
+    if (c.lid === lid || c.jid === lidJid) {
+      c.realPhone = phone;
+      c.telefone = phone;
+      c.phoneUnavailableReason = null;
+    }
+  });
+}
+
+function findMappedPhone(jid = "") {
+  if (isPhoneJid(jid)) return normalizePhone(cleanJid(jid));
+  if (isLidJid(jid)) return lidToPhone[cleanJid(jid)] || null;
+  return null;
+}
+
+function collectJidsFromObject(obj, found = new Set()) {
+  if (!obj || typeof obj !== "object") return found;
+
+  for (const value of Object.values(obj)) {
+    if (typeof value === "string") {
+      if (
+        value.endsWith("@s.whatsapp.net") ||
+        value.endsWith("@lid") ||
+        value.endsWith("@g.us")
+      ) {
+        found.add(value);
+      }
+    } else if (value && typeof value === "object") {
+      collectJidsFromObject(value, found);
+    }
+  }
+
+  return found;
+}
+
+async function learnPhonesFromMessage(msg) {
+  try {
+    const jids = [...collectJidsFromObject(msg)];
+    const lidJids = jids.filter(isLidJid);
+    const phoneJids = jids.filter(isPhoneJid);
+
+    for (const lid of lidJids) {
+      for (const phone of phoneJids) {
+        await mapLidToPhone(lid, phone);
+      }
+    }
+
+    const key = msg?.key || {};
+    if (key.participant && key.participantPn) {
+      await mapLidToPhone(key.participant, key.participantPn);
+    }
+
+    if (key.remoteJid && key.remoteJidPn) {
+      await mapLidToPhone(key.remoteJid, key.remoteJidPn);
+    }
+
+    if (key.senderLid && key.senderPn) {
+      await mapLidToPhone(key.senderLid, key.senderPn);
+    }
+  } catch (error) {
+    console.log("Não foi possível aprender telefone da mensagem:", error.message);
+  }
 }
 
 async function getProfilePicture(jid) {
@@ -138,7 +238,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       groupChat = {
         id: Date.now(),
         jid,
-        whatsappId: getWhatsappId(jid),
+        whatsappId: jid,
         lid: null,
         name: groupName,
         clientName: groupName,
@@ -161,12 +261,8 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     } else {
       groupChat.name = groupName;
       groupChat.clientName = groupName;
-      groupChat.clientPhone = cleanJid(jid);
-      groupChat.whatsappId = getWhatsappId(jid);
       groupChat.profilePictureUrl = profilePictureUrl || groupChat.profilePictureUrl || null;
       groupChat.avatarUrl = groupChat.profilePictureUrl;
-      groupChat.conversationType = "grupo_operacional";
-      groupChat.type = "grupo_operacional";
     }
 
     return groupChat;
@@ -174,9 +270,9 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
 
   let clientChat = clientConversations.find(c => c.jid === jid);
 
-  const clientPhone = cleanJid(jid);
-  const realPhone = getRealPhoneFromJid(jid);
-  const lid = getLid(jid);
+  const lid = isLidJid(jid) ? cleanJid(jid) : null;
+  const realPhone = findMappedPhone(jid);
+  const clientPhone = realPhone || cleanJid(jid);
   const clientName = displayName || clientPhone;
   const profilePictureUrl = await getProfilePicture(jid);
 
@@ -184,7 +280,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     clientChat = {
       id: Date.now(),
       jid,
-      whatsappId: getWhatsappId(jid),
+      whatsappId: jid,
       lid,
       name: clientName,
       clientName,
@@ -214,12 +310,9 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     clientChat.realPhone = realPhone;
     clientChat.telefone = realPhone;
     clientChat.lid = lid;
-    clientChat.whatsappId = getWhatsappId(jid);
     clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys";
     clientChat.profilePictureUrl = profilePictureUrl || clientChat.profilePictureUrl || null;
     clientChat.avatarUrl = clientChat.profilePictureUrl;
-    clientChat.conversationType = "cliente";
-    clientChat.type = "cliente";
   }
 
   return clientChat;
@@ -243,6 +336,7 @@ async function saveMessage({
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
 
+  const senderRealPhone = findMappedPhone(sender);
   const now = new Date().toISOString();
 
   const newMessage = {
@@ -251,6 +345,7 @@ async function saveMessage({
     jid,
     sender,
     senderName: senderName || sender,
+    senderRealPhone,
     text,
     direction,
     date: now,
@@ -295,8 +390,7 @@ async function saveMessage({
 }
 
 async function markDeletedMessage(jid, deletedWaMessageId) {
-  const isGroup = isGroupJid(jid);
-  const list = isGroup ? groupConversations : clientConversations;
+  const list = isGroupJid(jid) ? groupConversations : clientConversations;
   const chat = list.find(c => c.jid === jid);
 
   if (!chat) return false;
@@ -309,13 +403,7 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
     message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
     message.updatedAt = new Date().toISOString();
 
-    io.emit("mensagemApagada", {
-      jid,
-      waMessageId: deletedWaMessageId,
-      message,
-      conversation: chat
-    });
-
+    io.emit("mensagemApagada", { jid, waMessageId: deletedWaMessageId, message, conversation: chat });
     io.emit("conversasAtualizadas", getConversationList());
 
     return true;
@@ -347,7 +435,7 @@ function getExtensionFromMime(mimeType = "") {
 }
 
 async function saveBufferToMedia(buffer, originalName, mimeType) {
-  await ensureMediaDir();
+  await ensureDirs();
 
   const extension = getExtensionFromMime(mimeType);
   const fallbackName = `${Date.now()}.${extension}`;
@@ -391,16 +479,9 @@ async function saveIncomingMedia(msg) {
       `${msg.key.id}.${getExtensionFromMime(mimeType)}`;
 
     return await saveBufferToMedia(buffer, originalName, mimeType);
-
   } catch (error) {
     console.error("Erro ao salvar mídia recebida:", error);
-
-    return {
-      mediaUrl: null,
-      mediaName: null,
-      mimeType: null,
-      fileSize: null
-    };
+    return { mediaUrl: null, mediaName: null, mimeType: null, fileSize: null };
   }
 }
 
@@ -412,15 +493,13 @@ app.get("/status", (req, res) => {
     whatsappConectado: !!sock && connectionStatus.includes("conectado"),
     qrDisponivel: !!lastQr,
     clientes: clientConversations.length,
-    grupos: groupConversations.length
+    grupos: groupConversations.length,
+    lidMapeados: Object.keys(lidToPhone).length
   });
 });
 
 app.get("/qr", (req, res) => {
-  res.json({
-    status: connectionStatus,
-    qr: lastQr
-  });
+  res.json({ status: connectionStatus, qr: lastQr });
 });
 
 app.get("/clientes", (req, res) => {
@@ -435,25 +514,42 @@ app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
 
+app.get("/lid-map", (req, res) => {
+  res.json({ lidToPhone, phoneToLid });
+});
+
+app.post("/mapear-telefone", async (req, res) => {
+  const { lid, telefone } = req.body;
+
+  if (!lid || !telefone) {
+    return res.status(400).json({ erro: "Informe lid e telefone" });
+  }
+
+  const lidJid = lid.endsWith("@lid") ? lid : `${lid}@lid`;
+  const phoneJid = `${normalizePhone(telefone)}@s.whatsapp.net`;
+
+  await mapLidToPhone(lidJid, phoneJid);
+
+  res.json({
+    sucesso: true,
+    lid: cleanJid(lidJid),
+    telefone: normalizePhone(telefone)
+  });
+});
+
 app.post("/enviar", async (req, res) => {
   try {
     const { jid, mensagem } = req.body;
 
     if (!jid || !mensagem) {
-      return res.status(400).json({
-        erro: "Informe jid e mensagem"
-      });
+      return res.status(400).json({ erro: "Informe jid e mensagem" });
     }
 
     if (!sock) {
-      return res.status(503).json({
-        erro: "WhatsApp ainda não iniciado"
-      });
+      return res.status(503).json({ erro: "WhatsApp ainda não iniciado" });
     }
 
-    const sent = await sock.sendMessage(jid, {
-      text: mensagem
-    });
+    const sent = await sock.sendMessage(jid, { text: mensagem });
 
     await saveMessage({
       jid,
@@ -464,19 +560,10 @@ app.post("/enviar", async (req, res) => {
       waMessageId: sent?.key?.id || null
     });
 
-    res.json({
-      sucesso: true,
-      jid,
-      mensagem
-    });
-
+    res.json({ sucesso: true, jid, mensagem });
   } catch (error) {
     console.error("Erro ao enviar mensagem:", error);
-
-    res.status(500).json({
-      erro: "Erro ao enviar mensagem",
-      detalhe: error.message
-    });
+    res.status(500).json({ erro: "Erro ao enviar mensagem", detalhe: error.message });
   }
 });
 
@@ -485,15 +572,11 @@ app.post("/enviar-midia", async (req, res) => {
     const { jid, mediaType, base64, mimeType, fileName, caption } = req.body;
 
     if (!jid || !mediaType || !base64) {
-      return res.status(400).json({
-        erro: "Informe jid, mediaType e base64"
-      });
+      return res.status(400).json({ erro: "Informe jid, mediaType e base64" });
     }
 
     if (!sock) {
-      return res.status(503).json({
-        erro: "WhatsApp ainda não iniciado"
-      });
+      return res.status(503).json({ erro: "WhatsApp ainda não iniciado" });
     }
 
     const buffer = Buffer.from(base64, "base64");
@@ -507,21 +590,11 @@ app.post("/enviar-midia", async (req, res) => {
     let payload;
 
     if (mediaType === "image") {
-      payload = {
-        image: buffer,
-        caption: caption || ""
-      };
+      payload = { image: buffer, caption: caption || "" };
     } else if (mediaType === "audio") {
-      payload = {
-        audio: buffer,
-        mimetype: mimeType || "audio/ogg",
-        ptt: true
-      };
+      payload = { audio: buffer, mimetype: mimeType || "audio/ogg", ptt: true };
     } else if (mediaType === "video") {
-      payload = {
-        video: buffer,
-        caption: caption || ""
-      };
+      payload = { video: buffer, caption: caption || "" };
     } else if (mediaType === "document") {
       payload = {
         document: buffer,
@@ -560,14 +633,9 @@ app.post("/enviar-midia", async (req, res) => {
       fileSize: savedMedia.fileSize,
       message
     });
-
   } catch (error) {
     console.error("Erro ao enviar mídia:", error);
-
-    res.status(500).json({
-      erro: "Erro ao enviar mídia",
-      detalhe: error.message
-    });
+    res.status(500).json({ erro: "Erro ao enviar mídia", detalhe: error.message });
   }
 });
 
@@ -576,11 +644,9 @@ app.post("/desconectar", async (req, res) => {
     manualDisconnect = true;
 
     try {
-      if (sock) {
-        await sock.logout();
-      }
+      if (sock) await sock.logout();
     } catch (error) {
-      console.log("Logout retornou erro, continuando limpeza da sessão:", error.message);
+      console.log("Logout retornou erro, continuando limpeza:", error.message);
     }
 
     sock = null;
@@ -595,18 +661,10 @@ app.post("/desconectar", async (req, res) => {
       startWhatsApp();
     }, 2000);
 
-    res.json({
-      sucesso: true,
-      mensagem: "Sessão desconectada. Um novo QR Code será gerado."
-    });
-
+    res.json({ sucesso: true, mensagem: "Sessão desconectada. Um novo QR Code será gerado." });
   } catch (error) {
     console.error("Erro ao desconectar:", error);
-
-    res.status(500).json({
-      erro: "Erro ao desconectar",
-      detalhe: error.message
-    });
+    res.status(500).json({ erro: "Erro ao desconectar", detalhe: error.message });
   }
 });
 
@@ -683,7 +741,8 @@ async function startWhatsApp() {
     connectionStatus = "Conectando ao WhatsApp...";
     io.emit("status", { status: connectionStatus });
 
-    await ensureMediaDir();
+    await ensureDirs();
+    await loadLidMap();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
@@ -699,6 +758,24 @@ async function startWhatsApp() {
     });
 
     sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("contacts.update", async (contacts) => {
+      try {
+        for (const contact of contacts || []) {
+          const jids = [...collectJidsFromObject(contact)];
+          const lids = jids.filter(isLidJid);
+          const phones = jids.filter(isPhoneJid);
+
+          for (const lid of lids) {
+            for (const phone of phones) {
+              await mapLidToPhone(lid, phone);
+            }
+          }
+        }
+      } catch (error) {
+        console.log("Erro em contacts.update:", error.message);
+      }
+    });
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -778,6 +855,8 @@ async function startWhatsApp() {
         if (!msg?.message) continue;
         if (msg.key.fromMe) continue;
 
+        await learnPhonesFromMessage(msg);
+
         const jid = msg.key.remoteJid;
 
         if (jid === "status@broadcast") continue;
@@ -787,10 +866,7 @@ async function startWhatsApp() {
           const protocol = msg.message.protocolMessage;
           const deletedId = protocol?.key?.id;
 
-          if (deletedId) {
-            await markDeletedMessage(jid, deletedId);
-          }
-
+          if (deletedId) await markDeletedMessage(jid, deletedId);
           continue;
         }
 
@@ -833,10 +909,10 @@ async function startWhatsApp() {
         console.log("JID:", jid);
         console.log("Remetente:", senderName);
         console.log("Tipo:", messageType);
+        console.log("Telefone real mapeado:", findMappedPhone(sender || jid) || "não disponível");
         console.log("Mensagem:", text || `[${messageType}]`);
       }
     });
-
   } catch (error) {
     console.error("Erro ao iniciar WhatsApp:", error);
     connectionStatus = "Erro ao iniciar WhatsApp. Veja os logs.";
