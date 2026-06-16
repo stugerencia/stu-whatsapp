@@ -15,7 +15,7 @@ const {
   downloadMediaMessage
 } = baileys;
 
-console.log("######## STU ATENDIMENTO WHATSAPP V3 ########");
+console.log("######## STU ATENDIMENTO WHATSAPP V4 ########");
 
 const app = express();
 const server = http.createServer(app);
@@ -24,7 +24,7 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "80mb" }));
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -46,10 +46,6 @@ let manualDisconnect = false;
 let clientConversations = [];
 let groupConversations = [];
 
-function baseUrl(req) {
-  return `${req.protocol}://${req.get("host")}`;
-}
-
 function cleanJid(jid = "") {
   return jid
     .replace("@s.whatsapp.net", "")
@@ -57,16 +53,26 @@ function cleanJid(jid = "") {
     .replace("@lid", "");
 }
 
+function isGroupJid(jid = "") {
+  return jid.endsWith("@g.us");
+}
+
 function getRealPhoneFromJid(jid = "") {
   if (jid.endsWith("@s.whatsapp.net")) {
     return cleanJid(jid);
   }
-
   return null;
 }
 
-function isGroupJid(jid = "") {
-  return jid.endsWith("@g.us");
+function getWhatsappId(jid = "") {
+  return jid;
+}
+
+function getLid(jid = "") {
+  if (jid.endsWith("@lid")) {
+    return cleanJid(jid);
+  }
+  return null;
 }
 
 function getMessageType(message = {}) {
@@ -132,10 +138,13 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       groupChat = {
         id: Date.now(),
         jid,
+        whatsappId: getWhatsappId(jid),
+        lid: null,
         name: groupName,
         clientName: groupName,
         clientPhone: cleanJid(jid),
         realPhone: null,
+        telefone: null,
         phoneUnavailableReason: "Grupo não possui telefone único",
         profilePictureUrl,
         avatarUrl: profilePictureUrl,
@@ -153,6 +162,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       groupChat.name = groupName;
       groupChat.clientName = groupName;
       groupChat.clientPhone = cleanJid(jid);
+      groupChat.whatsappId = getWhatsappId(jid);
       groupChat.profilePictureUrl = profilePictureUrl || groupChat.profilePictureUrl || null;
       groupChat.avatarUrl = groupChat.profilePictureUrl;
       groupChat.conversationType = "grupo_operacional";
@@ -166,6 +176,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
 
   const clientPhone = cleanJid(jid);
   const realPhone = getRealPhoneFromJid(jid);
+  const lid = getLid(jid);
   const clientName = displayName || clientPhone;
   const profilePictureUrl = await getProfilePicture(jid);
 
@@ -173,10 +184,13 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     clientChat = {
       id: Date.now(),
       jid,
+      whatsappId: getWhatsappId(jid),
+      lid,
       name: clientName,
       clientName,
       clientPhone,
       realPhone,
+      telefone: realPhone,
       phoneUnavailableReason: realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys",
       profilePictureUrl,
       avatarUrl: profilePictureUrl,
@@ -198,6 +212,9 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
 
     clientChat.clientPhone = clientPhone;
     clientChat.realPhone = realPhone;
+    clientChat.telefone = realPhone;
+    clientChat.lid = lid;
+    clientChat.whatsappId = getWhatsappId(jid);
     clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys";
     clientChat.profilePictureUrl = profilePictureUrl || clientChat.profilePictureUrl || null;
     clientChat.avatarUrl = clientChat.profilePictureUrl;
@@ -226,6 +243,8 @@ async function saveMessage({
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
 
+  const now = new Date().toISOString();
+
   const newMessage = {
     id: Date.now(),
     waMessageId: waMessageId || null,
@@ -234,8 +253,8 @@ async function saveMessage({
     senderName: senderName || sender,
     text,
     direction,
-    date: new Date().toISOString(),
-    sentAt: new Date().toISOString(),
+    date: now,
+    sentAt: now,
     read: direction === "sent",
     mediaType,
     mediaUrl,
@@ -248,7 +267,14 @@ async function saveMessage({
   };
 
   chat.messages.push(newMessage);
-  chat.lastMessage = text || mediaName || `[${mediaType}]`;
+
+  if (mediaType === "audio") chat.lastMessage = "🎧 Áudio";
+  else if (mediaType === "image") chat.lastMessage = "🖼️ Imagem";
+  else if (mediaType === "video") chat.lastMessage = "🎥 Vídeo";
+  else if (mediaType === "document") chat.lastMessage = "📎 Documento";
+  else if (mediaType === "sticker") chat.lastMessage = "Figurinha";
+  else chat.lastMessage = text || "";
+
   chat.lastMessageText = chat.lastMessage;
   chat.lastMessageAt = newMessage.date;
   chat.lastMessageTime = newMessage.date;
@@ -307,10 +333,40 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
   return false;
 }
 
-async function saveIncomingMedia(msg, messageType, reqBaseUrl = null) {
-  try {
-    await ensureMediaDir();
+function getExtensionFromMime(mimeType = "") {
+  if (mimeType.includes("jpeg")) return "jpg";
+  if (mimeType.includes("png")) return "png";
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("mpeg")) return "mp3";
+  if (mimeType.includes("mp4")) return "mp4";
+  if (mimeType.includes("pdf")) return "pdf";
+  if (mimeType.includes("word")) return "docx";
+  if (mimeType.includes("excel") || mimeType.includes("spreadsheet")) return "xlsx";
+  return "bin";
+}
 
+async function saveBufferToMedia(buffer, originalName, mimeType) {
+  await ensureMediaDir();
+
+  const extension = getExtensionFromMime(mimeType);
+  const fallbackName = `${Date.now()}.${extension}`;
+  const safeOriginalName = (originalName || fallbackName).replace(/[^\w.\-]/g, "_");
+  const fileName = `${Date.now()}-${safeOriginalName}`;
+  const filePath = path.join(MEDIA_DIR, fileName);
+
+  await fs.writeFile(filePath, buffer);
+
+  return {
+    mediaUrl: `/media/${fileName}`,
+    mediaName: originalName || fileName,
+    mimeType,
+    fileSize: buffer.length
+  };
+}
+
+async function saveIncomingMedia(msg) {
+  try {
     const buffer = await downloadMediaMessage(
       msg,
       "buffer",
@@ -330,36 +386,18 @@ async function saveIncomingMedia(msg, messageType, reqBaseUrl = null) {
       message.stickerMessage;
 
     const mimeType = mediaMessage?.mimetype || "application/octet-stream";
-    const extension =
-      mimeType.includes("jpeg") ? "jpg" :
-      mimeType.includes("png") ? "png" :
-      mimeType.includes("ogg") ? "ogg" :
-      mimeType.includes("mpeg") ? "mp3" :
-      mimeType.includes("mp4") ? "mp4" :
-      mimeType.includes("pdf") ? "pdf" :
-      "bin";
-
-    const mediaName =
+    const originalName =
       mediaMessage?.fileName ||
-      `${Date.now()}-${msg.key.id}.${extension}`;
+      `${msg.key.id}.${getExtensionFromMime(mimeType)}`;
 
-    const safeName = mediaName.replace(/[^\w.\-]/g, "_");
-    const fileName = `${Date.now()}-${safeName}`;
-    const filePath = path.join(MEDIA_DIR, fileName);
+    return await saveBufferToMedia(buffer, originalName, mimeType);
 
-    await fs.writeFile(filePath, buffer);
-
-    return {
-      mediaUrl: `/media/${fileName}`,
-      mediaName,
-      mimeType,
-      fileSize: buffer.length
-    };
   } catch (error) {
-    console.error("Erro ao salvar mídia:", error);
+    console.error("Erro ao salvar mídia recebida:", error);
+
     return {
       mediaUrl: null,
-      mediaName: "Mídia recebida, mas não foi possível salvar",
+      mediaName: null,
       mimeType: null,
       fileSize: null
     };
@@ -460,14 +498,30 @@ app.post("/enviar-midia", async (req, res) => {
 
     const buffer = Buffer.from(base64, "base64");
 
+    const savedMedia = await saveBufferToMedia(
+      buffer,
+      fileName || `${Date.now()}.${getExtensionFromMime(mimeType || "")}`,
+      mimeType || "application/octet-stream"
+    );
+
     let payload;
 
     if (mediaType === "image") {
-      payload = { image: buffer, caption: caption || "" };
+      payload = {
+        image: buffer,
+        caption: caption || ""
+      };
     } else if (mediaType === "audio") {
-      payload = { audio: buffer, mimetype: mimeType || "audio/ogg", ptt: true };
+      payload = {
+        audio: buffer,
+        mimetype: mimeType || "audio/ogg",
+        ptt: true
+      };
     } else if (mediaType === "video") {
-      payload = { video: buffer, caption: caption || "" };
+      payload = {
+        video: buffer,
+        caption: caption || ""
+      };
     } else if (mediaType === "document") {
       payload = {
         document: buffer,
@@ -482,23 +536,29 @@ app.post("/enviar-midia", async (req, res) => {
 
     const sent = await sock.sendMessage(jid, payload);
 
-    await saveMessage({
+    const message = await saveMessage({
       jid,
       sender: "sistema",
       senderName: "STU Atendimento",
-      text: caption || fileName || `[${mediaType}]`,
+      text: caption || "",
       direction: "sent",
       waMessageId: sent?.key?.id || null,
       mediaType,
-      mediaName: fileName || null,
-      mimeType: mimeType || null
+      mediaUrl: savedMedia.mediaUrl,
+      mediaName: savedMedia.mediaName,
+      mimeType: savedMedia.mimeType,
+      fileSize: savedMedia.fileSize
     });
 
     res.json({
       sucesso: true,
       jid,
       mediaType,
-      fileName: fileName || null
+      mediaUrl: savedMedia.mediaUrl,
+      mediaName: savedMedia.mediaName,
+      mimeType: savedMedia.mimeType,
+      fileSize: savedMedia.fileSize,
+      message
     });
 
   } catch (error) {
@@ -589,7 +649,6 @@ app.get("/", (req, res) => {
 
           async function desconectar() {
             if (!confirm("Deseja desconectar esta conta e gerar um novo QR Code?")) return;
-
             await fetch("/desconectar", { method: "POST" });
             setTimeout(() => location.reload(), 3000);
           }
@@ -750,7 +809,7 @@ async function startWhatsApp() {
         };
 
         if (["image", "audio", "video", "document", "sticker"].includes(messageType)) {
-          mediaInfo = await saveIncomingMedia(msg, messageType);
+          mediaInfo = await saveIncomingMedia(msg);
         }
 
         if (!text && messageType === "text") continue;
@@ -760,7 +819,7 @@ async function startWhatsApp() {
           sender,
           senderName,
           displayName: isGroup ? null : senderName,
-          text: text || `[${messageType}]`,
+          text: text || "",
           direction: "received",
           waMessageId: msg.key.id,
           mediaType: messageType === "text" ? "none" : messageType,
