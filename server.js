@@ -3,16 +3,19 @@ import http from "http";
 import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
+import fs from "fs/promises";
+import path from "path";
 import baileys from "@whiskeysockets/baileys";
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason
+  DisconnectReason,
+  downloadMediaMessage
 } = baileys;
 
-console.log("######## STU ATENDIMENTO WHATSAPP ########");
+console.log("######## STU ATENDIMENTO WHATSAPP V3 ########");
 
 const app = express();
 const server = http.createServer(app);
@@ -21,7 +24,7 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -33,36 +36,89 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
+const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
 
 let sock;
 let lastQr = null;
 let connectionStatus = "iniciando";
+let manualDisconnect = false;
 
 let clientConversations = [];
 let groupConversations = [];
 
-function cleanJid(jid) {
+function baseUrl(req) {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function cleanJid(jid = "") {
   return jid
     .replace("@s.whatsapp.net", "")
     .replace("@g.us", "")
     .replace("@lid", "");
 }
 
+function getRealPhoneFromJid(jid = "") {
+  if (jid.endsWith("@s.whatsapp.net")) {
+    return cleanJid(jid);
+  }
+
+  return null;
+}
+
+function isGroupJid(jid = "") {
+  return jid.endsWith("@g.us");
+}
+
+function getMessageType(message = {}) {
+  if (message.conversation || message.extendedTextMessage) return "text";
+  if (message.imageMessage) return "image";
+  if (message.audioMessage) return "audio";
+  if (message.videoMessage) return "video";
+  if (message.documentMessage) return "document";
+  if (message.stickerMessage) return "sticker";
+  return "unknown";
+}
+
+function getTextFromMessage(message = {}) {
+  return (
+    message.conversation ||
+    message.extendedTextMessage?.text ||
+    message.imageMessage?.caption ||
+    message.videoMessage?.caption ||
+    message.documentMessage?.caption ||
+    ""
+  );
+}
+
+async function ensureMediaDir() {
+  await fs.mkdir(MEDIA_DIR, { recursive: true });
+}
+
+async function getProfilePicture(jid) {
+  try {
+    if (!sock) return null;
+    return await sock.profilePictureUrl(jid, "image");
+  } catch {
+    return null;
+  }
+}
+
 async function getGroupName(jid) {
   try {
     if (!sock) return jid;
-
     const metadata = await sock.groupMetadata(jid);
-
-    if (metadata?.subject) {
-      return metadata.subject;
-    }
-
-    return jid;
-  } catch (error) {
-    console.log("Não foi possível buscar nome do grupo:", jid);
+    return metadata?.subject || jid;
+  } catch {
     return jid;
   }
+}
+
+function getConversationList() {
+  return [...clientConversations, ...groupConversations].sort((a, b) => {
+    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
 }
 
 async function getOrCreateConversation(jid, isGroup, displayName = null) {
@@ -70,6 +126,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     let groupChat = groupConversations.find(c => c.jid === jid);
 
     const groupName = await getGroupName(jid);
+    const profilePictureUrl = await getProfilePicture(jid);
 
     if (!groupChat) {
       groupChat = {
@@ -78,6 +135,10 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
         name: groupName,
         clientName: groupName,
         clientPhone: cleanJid(jid),
+        realPhone: null,
+        phoneUnavailableReason: "Grupo não possui telefone único",
+        profilePictureUrl,
+        avatarUrl: profilePictureUrl,
         conversationType: "grupo_operacional",
         type: "grupo_operacional",
         status: "monitorando",
@@ -92,6 +153,8 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       groupChat.name = groupName;
       groupChat.clientName = groupName;
       groupChat.clientPhone = cleanJid(jid);
+      groupChat.profilePictureUrl = profilePictureUrl || groupChat.profilePictureUrl || null;
+      groupChat.avatarUrl = groupChat.profilePictureUrl;
       groupChat.conversationType = "grupo_operacional";
       groupChat.type = "grupo_operacional";
     }
@@ -102,7 +165,9 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
   let clientChat = clientConversations.find(c => c.jid === jid);
 
   const clientPhone = cleanJid(jid);
+  const realPhone = getRealPhoneFromJid(jid);
   const clientName = displayName || clientPhone;
+  const profilePictureUrl = await getProfilePicture(jid);
 
   if (!clientChat) {
     clientChat = {
@@ -111,6 +176,10 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       name: clientName,
       clientName,
       clientPhone,
+      realPhone,
+      phoneUnavailableReason: realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys",
+      profilePictureUrl,
+      avatarUrl: profilePictureUrl,
       conversationType: "cliente",
       type: "cliente",
       status: "nova",
@@ -128,6 +197,10 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     }
 
     clientChat.clientPhone = clientPhone;
+    clientChat.realPhone = realPhone;
+    clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys";
+    clientChat.profilePictureUrl = profilePictureUrl || clientChat.profilePictureUrl || null;
+    clientChat.avatarUrl = clientChat.profilePictureUrl;
     clientChat.conversationType = "cliente";
     clientChat.type = "cliente";
   }
@@ -135,25 +208,48 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
   return clientChat;
 }
 
-async function saveMessage({ jid, sender, senderName, text, direction, displayName }) {
-  const isGroup = jid.endsWith("@g.us");
+async function saveMessage({
+  jid,
+  sender,
+  senderName,
+  text,
+  direction,
+  displayName,
+  waMessageId,
+  mediaType = "none",
+  mediaUrl = null,
+  mediaName = null,
+  mimeType = null,
+  fileSize = null,
+  system = false
+}) {
+  const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
 
   const newMessage = {
     id: Date.now(),
+    waMessageId: waMessageId || null,
     jid,
     sender,
     senderName: senderName || sender,
     text,
     direction,
     date: new Date().toISOString(),
-    read: direction === "sent"
+    sentAt: new Date().toISOString(),
+    read: direction === "sent",
+    mediaType,
+    mediaUrl,
+    mediaName,
+    mimeType,
+    fileSize,
+    system,
+    deletedInWhatsApp: false,
+    preservedInSystem: true
   };
 
   chat.messages.push(newMessage);
-
-  chat.lastMessage = text;
-  chat.lastMessageText = text;
+  chat.lastMessage = text || mediaName || `[${mediaType}]`;
+  chat.lastMessageText = chat.lastMessage;
   chat.lastMessageAt = newMessage.date;
   chat.lastMessageTime = newMessage.date;
 
@@ -161,15 +257,131 @@ async function saveMessage({ jid, sender, senderName, text, direction, displayNa
     chat.unreadCount = (chat.unreadCount || 0) + 1;
   }
 
+  io.emit("novaMensagem", {
+    conversation: chat,
+    message: newMessage,
+    conversas: getConversationList()
+  });
+
+  io.emit("conversasAtualizadas", getConversationList());
+
   return newMessage;
 }
+
+async function markDeletedMessage(jid, deletedWaMessageId) {
+  const isGroup = isGroupJid(jid);
+  const list = isGroup ? groupConversations : clientConversations;
+  const chat = list.find(c => c.jid === jid);
+
+  if (!chat) return false;
+
+  const message = chat.messages.find(m => m.waMessageId === deletedWaMessageId);
+
+  if (message) {
+    message.deletedInWhatsApp = true;
+    message.preservedInSystem = true;
+    message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
+    message.updatedAt = new Date().toISOString();
+
+    io.emit("mensagemApagada", {
+      jid,
+      waMessageId: deletedWaMessageId,
+      message,
+      conversation: chat
+    });
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return true;
+  }
+
+  await saveMessage({
+    jid,
+    sender: "sistema",
+    senderName: "Sistema",
+    text: "Uma mensagem foi apagada no WhatsApp, mas não foi encontrada no histórico local.",
+    direction: "system",
+    system: true
+  });
+
+  return false;
+}
+
+async function saveIncomingMedia(msg, messageType, reqBaseUrl = null) {
+  try {
+    await ensureMediaDir();
+
+    const buffer = await downloadMediaMessage(
+      msg,
+      "buffer",
+      {},
+      {
+        logger: pino({ level: "silent" }),
+        reuploadRequest: sock?.updateMediaMessage
+      }
+    );
+
+    const message = msg.message || {};
+    const mediaMessage =
+      message.imageMessage ||
+      message.audioMessage ||
+      message.videoMessage ||
+      message.documentMessage ||
+      message.stickerMessage;
+
+    const mimeType = mediaMessage?.mimetype || "application/octet-stream";
+    const extension =
+      mimeType.includes("jpeg") ? "jpg" :
+      mimeType.includes("png") ? "png" :
+      mimeType.includes("ogg") ? "ogg" :
+      mimeType.includes("mpeg") ? "mp3" :
+      mimeType.includes("mp4") ? "mp4" :
+      mimeType.includes("pdf") ? "pdf" :
+      "bin";
+
+    const mediaName =
+      mediaMessage?.fileName ||
+      `${Date.now()}-${msg.key.id}.${extension}`;
+
+    const safeName = mediaName.replace(/[^\w.\-]/g, "_");
+    const fileName = `${Date.now()}-${safeName}`;
+    const filePath = path.join(MEDIA_DIR, fileName);
+
+    await fs.writeFile(filePath, buffer);
+
+    return {
+      mediaUrl: `/media/${fileName}`,
+      mediaName,
+      mimeType,
+      fileSize: buffer.length
+    };
+  } catch (error) {
+    console.error("Erro ao salvar mídia:", error);
+    return {
+      mediaUrl: null,
+      mediaName: "Mídia recebida, mas não foi possível salvar",
+      mimeType: null,
+      fileSize: null
+    };
+  }
+}
+
+app.use("/media", express.static(MEDIA_DIR));
 
 app.get("/status", (req, res) => {
   res.json({
     status: connectionStatus,
     whatsappConectado: !!sock && connectionStatus.includes("conectado"),
+    qrDisponivel: !!lastQr,
     clientes: clientConversations.length,
     grupos: groupConversations.length
+  });
+});
+
+app.get("/qr", (req, res) => {
+  res.json({
+    status: connectionStatus,
+    qr: lastQr
   });
 });
 
@@ -182,13 +394,7 @@ app.get("/grupos", (req, res) => {
 });
 
 app.get("/conversas", (req, res) => {
-  const conversas = [...clientConversations, ...groupConversations].sort((a, b) => {
-    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
-    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
-    return dateB - dateA;
-  });
-
-  res.json(conversas);
+  res.json(getConversationList());
 });
 
 app.post("/enviar", async (req, res) => {
@@ -207,7 +413,7 @@ app.post("/enviar", async (req, res) => {
       });
     }
 
-    await sock.sendMessage(jid, {
+    const sent = await sock.sendMessage(jid, {
       text: mensagem
     });
 
@@ -216,7 +422,8 @@ app.post("/enviar", async (req, res) => {
       sender: "sistema",
       senderName: "STU Atendimento",
       text: mensagem,
-      direction: "sent"
+      direction: "sent",
+      waMessageId: sent?.key?.id || null
     });
 
     res.json({
@@ -235,6 +442,114 @@ app.post("/enviar", async (req, res) => {
   }
 });
 
+app.post("/enviar-midia", async (req, res) => {
+  try {
+    const { jid, mediaType, base64, mimeType, fileName, caption } = req.body;
+
+    if (!jid || !mediaType || !base64) {
+      return res.status(400).json({
+        erro: "Informe jid, mediaType e base64"
+      });
+    }
+
+    if (!sock) {
+      return res.status(503).json({
+        erro: "WhatsApp ainda não iniciado"
+      });
+    }
+
+    const buffer = Buffer.from(base64, "base64");
+
+    let payload;
+
+    if (mediaType === "image") {
+      payload = { image: buffer, caption: caption || "" };
+    } else if (mediaType === "audio") {
+      payload = { audio: buffer, mimetype: mimeType || "audio/ogg", ptt: true };
+    } else if (mediaType === "video") {
+      payload = { video: buffer, caption: caption || "" };
+    } else if (mediaType === "document") {
+      payload = {
+        document: buffer,
+        mimetype: mimeType || "application/octet-stream",
+        fileName: fileName || "arquivo"
+      };
+    } else {
+      return res.status(400).json({
+        erro: "mediaType inválido. Use image, audio, video ou document"
+      });
+    }
+
+    const sent = await sock.sendMessage(jid, payload);
+
+    await saveMessage({
+      jid,
+      sender: "sistema",
+      senderName: "STU Atendimento",
+      text: caption || fileName || `[${mediaType}]`,
+      direction: "sent",
+      waMessageId: sent?.key?.id || null,
+      mediaType,
+      mediaName: fileName || null,
+      mimeType: mimeType || null
+    });
+
+    res.json({
+      sucesso: true,
+      jid,
+      mediaType,
+      fileName: fileName || null
+    });
+
+  } catch (error) {
+    console.error("Erro ao enviar mídia:", error);
+
+    res.status(500).json({
+      erro: "Erro ao enviar mídia",
+      detalhe: error.message
+    });
+  }
+});
+
+app.post("/desconectar", async (req, res) => {
+  try {
+    manualDisconnect = true;
+
+    try {
+      if (sock) {
+        await sock.logout();
+      }
+    } catch (error) {
+      console.log("Logout retornou erro, continuando limpeza da sessão:", error.message);
+    }
+
+    sock = null;
+    lastQr = null;
+    connectionStatus = "🔴 WhatsApp desconectado. Gerando novo QR Code...";
+    io.emit("status", { status: connectionStatus });
+
+    await fs.rm(AUTH_DIR, { recursive: true, force: true });
+
+    setTimeout(() => {
+      manualDisconnect = false;
+      startWhatsApp();
+    }, 2000);
+
+    res.json({
+      sucesso: true,
+      mensagem: "Sessão desconectada. Um novo QR Code será gerado."
+    });
+
+  } catch (error) {
+    console.error("Erro ao desconectar:", error);
+
+    res.status(500).json({
+      erro: "Erro ao desconectar",
+      detalhe: error.message
+    });
+  }
+});
+
 app.get("/", (req, res) => {
   res.send(`
     <html>
@@ -245,7 +560,8 @@ app.get("/", (req, res) => {
           .card { background:white; padding:30px; border-radius:16px; max-width:520px; margin:auto; box-shadow:0 10px 30px #0001; text-align:center; }
           img { max-width:280px; margin:20px auto; display:block; }
           .status { font-size:18px; font-weight:bold; margin:20px; }
-          button { padding:12px 18px; border:0; border-radius:10px; background:#1f8f5f; color:white; cursor:pointer; }
+          button { padding:12px 18px; border:0; border-radius:10px; background:#1f8f5f; color:white; cursor:pointer; margin:4px; }
+          .danger { background:#b91c1c; }
         </style>
       </head>
       <body>
@@ -254,6 +570,7 @@ app.get("/", (req, res) => {
           <div class="status" id="status">Carregando...</div>
           <div id="qr"></div>
           <button onclick="location.reload()">Atualizar</button>
+          <button class="danger" onclick="desconectar()">Desconectar conta</button>
         </div>
 
         <script src="/socket.io/socket.io.js"></script>
@@ -269,6 +586,13 @@ app.get("/", (req, res) => {
           });
 
           socket.emit("get-current");
+
+          async function desconectar() {
+            if (!confirm("Deseja desconectar esta conta e gerar um novo QR Code?")) return;
+
+            await fetch("/desconectar", { method: "POST" });
+            setTimeout(() => location.reload(), 3000);
+          }
         </script>
       </body>
     </html>
@@ -282,12 +606,16 @@ io.on("connection", (client) => {
     client.emit("qr", { qrImage: lastQr });
   }
 
+  client.emit("conversasAtualizadas", getConversationList());
+
   client.on("get-current", () => {
     client.emit("status", { status: connectionStatus });
 
     if (lastQr) {
       client.emit("qr", { qrImage: lastQr });
     }
+
+    client.emit("conversasAtualizadas", getConversationList());
   });
 });
 
@@ -295,6 +623,8 @@ async function startWhatsApp() {
   try {
     connectionStatus = "Conectando ao WhatsApp...";
     io.emit("status", { status: connectionStatus });
+
+    await ensureMediaDir();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
@@ -334,8 +664,14 @@ async function startWhatsApp() {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         console.log("Conexão fechada. Código:", statusCode);
 
+        if (manualDisconnect) {
+          connectionStatus = "🔴 WhatsApp desconectado manualmente";
+          io.emit("status", { status: connectionStatus });
+          return;
+        }
+
         if (statusCode === DisconnectReason.loggedOut) {
-          connectionStatus = "🔴 Sessão encerrada. Apague o volume/auth e gere novo QR.";
+          connectionStatus = "🔴 Sessão encerrada. Gere novo QR Code.";
           io.emit("status", { status: connectionStatus });
           return;
         }
@@ -349,46 +685,97 @@ async function startWhatsApp() {
       }
     });
 
+    sock.ev.on("call", async (calls) => {
+      try {
+        for (const call of calls || []) {
+          const jid = call.from;
+
+          await saveMessage({
+            jid,
+            sender: jid,
+            senderName: "Chamada WhatsApp",
+            text: "Chamada recebida e não atendida pelo sistema.",
+            direction: "system",
+            system: true
+          });
+
+          if (typeof sock.rejectCall === "function" && call.id && call.from) {
+            try {
+              await sock.rejectCall(call.id, call.from);
+            } catch {
+              console.log("Não foi possível rejeitar chamada automaticamente.");
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Erro ao tratar chamada:", error);
+      }
+    });
+
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
 
-      const msg = messages?.[0];
-      if (!msg?.message) return;
-      if (msg.key.fromMe) return;
+      for (const msg of messages || []) {
+        if (!msg?.message) continue;
+        if (msg.key.fromMe) continue;
 
-      const jid = msg.key.remoteJid;
+        const jid = msg.key.remoteJid;
 
-      if (jid === "status@broadcast") return;
-      if (msg.message.protocolMessage) return;
-      if (msg.message.senderKeyDistributionMessage) return;
+        if (jid === "status@broadcast") continue;
+        if (msg.message.senderKeyDistributionMessage) continue;
 
-      const isGroup = jid.endsWith("@g.us");
-      const sender = isGroup ? msg.key.participant : jid;
-      const senderName = msg.pushName || sender;
+        if (msg.message.protocolMessage) {
+          const protocol = msg.message.protocolMessage;
+          const deletedId = protocol?.key?.id;
 
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        msg.message.documentMessage?.caption ||
-        "";
+          if (deletedId) {
+            await markDeletedMessage(jid, deletedId);
+          }
 
-      if (!text) return;
+          continue;
+        }
 
-      await saveMessage({
-        jid,
-        sender,
-        senderName,
-        displayName: isGroup ? null : senderName,
-        text,
-        direction: "received"
-      });
+        const isGroup = isGroupJid(jid);
+        const sender = isGroup ? msg.key.participant : jid;
+        const senderName = msg.pushName || sender;
 
-      console.log(isGroup ? "Mensagem de GRUPO salva:" : "Mensagem de CLIENTE salva:");
-      console.log("JID:", jid);
-      console.log("Remetente:", senderName);
-      console.log("Mensagem:", text);
+        const messageType = getMessageType(msg.message);
+        const text = getTextFromMessage(msg.message);
+
+        let mediaInfo = {
+          mediaUrl: null,
+          mediaName: null,
+          mimeType: null,
+          fileSize: null
+        };
+
+        if (["image", "audio", "video", "document", "sticker"].includes(messageType)) {
+          mediaInfo = await saveIncomingMedia(msg, messageType);
+        }
+
+        if (!text && messageType === "text") continue;
+
+        await saveMessage({
+          jid,
+          sender,
+          senderName,
+          displayName: isGroup ? null : senderName,
+          text: text || `[${messageType}]`,
+          direction: "received",
+          waMessageId: msg.key.id,
+          mediaType: messageType === "text" ? "none" : messageType,
+          mediaUrl: mediaInfo.mediaUrl,
+          mediaName: mediaInfo.mediaName,
+          mimeType: mediaInfo.mimeType,
+          fileSize: mediaInfo.fileSize
+        });
+
+        console.log(isGroup ? "Mensagem de GRUPO salva:" : "Mensagem de CLIENTE salva:");
+        console.log("JID:", jid);
+        console.log("Remetente:", senderName);
+        console.log("Tipo:", messageType);
+        console.log("Mensagem:", text || `[${messageType}]`);
+      }
     });
 
   } catch (error) {
