@@ -4,7 +4,7 @@ import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
 
-console.log("######## STU VERSAO NOVA TESTE 001 ########");
+console.log("######## STU VERSAO NOVA TESTE 002 ENVIAR ########");
 
 import baileys from "@whiskeysockets/baileys";
 
