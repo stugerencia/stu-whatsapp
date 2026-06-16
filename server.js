@@ -41,22 +41,59 @@ let connectionStatus = "iniciando";
 let clientConversations = [];
 let groupConversations = [];
 
-function getOrCreateConversation(jid, isGroup) {
+function cleanJid(jid) {
+  return jid
+    .replace("@s.whatsapp.net", "")
+    .replace("@g.us", "")
+    .replace("@lid", "");
+}
+
+async function getGroupName(jid) {
+  try {
+    if (!sock) return jid;
+
+    const metadata = await sock.groupMetadata(jid);
+
+    if (metadata?.subject) {
+      return metadata.subject;
+    }
+
+    return jid;
+  } catch (error) {
+    console.log("Não foi possível buscar nome do grupo:", jid);
+    return jid;
+  }
+}
+
+async function getOrCreateConversation(jid, isGroup, displayName = null) {
   if (isGroup) {
     let groupChat = groupConversations.find(c => c.jid === jid);
+
+    const groupName = await getGroupName(jid);
 
     if (!groupChat) {
       groupChat = {
         id: Date.now(),
         jid,
-        name: jid,
+        name: groupName,
+        clientName: groupName,
+        clientPhone: cleanJid(jid),
+        conversationType: "grupo_operacional",
         type: "grupo_operacional",
         status: "monitorando",
+        attendant: null,
+        unreadCount: 0,
         messages: [],
         createdAt: new Date().toISOString()
       };
 
       groupConversations.push(groupChat);
+    } else {
+      groupChat.name = groupName;
+      groupChat.clientName = groupName;
+      groupChat.clientPhone = cleanJid(jid);
+      groupChat.conversationType = "grupo_operacional";
+      groupChat.type = "grupo_operacional";
     }
 
     return groupChat;
@@ -64,32 +101,49 @@ function getOrCreateConversation(jid, isGroup) {
 
   let clientChat = clientConversations.find(c => c.jid === jid);
 
+  const clientPhone = cleanJid(jid);
+  const clientName = displayName || clientPhone;
+
   if (!clientChat) {
     clientChat = {
       id: Date.now(),
       jid,
-      name: jid.replace("@s.whatsapp.net", "").replace("@lid", ""),
+      name: clientName,
+      clientName,
+      clientPhone,
+      conversationType: "cliente",
       type: "cliente",
       status: "nova",
       attendant: null,
+      unreadCount: 0,
       messages: [],
       createdAt: new Date().toISOString()
     };
 
     clientConversations.push(clientChat);
+  } else {
+    if (displayName) {
+      clientChat.name = displayName;
+      clientChat.clientName = displayName;
+    }
+
+    clientChat.clientPhone = clientPhone;
+    clientChat.conversationType = "cliente";
+    clientChat.type = "cliente";
   }
 
   return clientChat;
 }
 
-function saveMessage({ jid, sender, text, direction }) {
+async function saveMessage({ jid, sender, senderName, text, direction, displayName }) {
   const isGroup = jid.endsWith("@g.us");
-  const chat = getOrCreateConversation(jid, isGroup);
+  const chat = await getOrCreateConversation(jid, isGroup, displayName);
 
   const newMessage = {
     id: Date.now(),
     jid,
     sender,
+    senderName: senderName || sender,
     text,
     direction,
     date: new Date().toISOString(),
@@ -97,8 +151,15 @@ function saveMessage({ jid, sender, text, direction }) {
   };
 
   chat.messages.push(newMessage);
+
   chat.lastMessage = text;
+  chat.lastMessageText = text;
   chat.lastMessageAt = newMessage.date;
+  chat.lastMessageTime = newMessage.date;
+
+  if (direction === "received") {
+    chat.unreadCount = (chat.unreadCount || 0) + 1;
+  }
 
   return newMessage;
 }
@@ -106,7 +167,7 @@ function saveMessage({ jid, sender, text, direction }) {
 app.get("/status", (req, res) => {
   res.json({
     status: connectionStatus,
-    whatsappConectado: !!sock,
+    whatsappConectado: !!sock && connectionStatus.includes("conectado"),
     clientes: clientConversations.length,
     grupos: groupConversations.length
   });
@@ -118,6 +179,16 @@ app.get("/clientes", (req, res) => {
 
 app.get("/grupos", (req, res) => {
   res.json(groupConversations);
+});
+
+app.get("/conversas", (req, res) => {
+  const conversas = [...clientConversations, ...groupConversations].sort((a, b) => {
+    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+
+  res.json(conversas);
 });
 
 app.post("/enviar", async (req, res) => {
@@ -140,9 +211,10 @@ app.post("/enviar", async (req, res) => {
       text: mensagem
     });
 
-    saveMessage({
+    await saveMessage({
       jid,
       sender: "sistema",
+      senderName: "STU Atendimento",
       text: mensagem,
       direction: "sent"
     });
@@ -292,6 +364,7 @@ async function startWhatsApp() {
 
       const isGroup = jid.endsWith("@g.us");
       const sender = isGroup ? msg.key.participant : jid;
+      const senderName = msg.pushName || sender;
 
       const text =
         msg.message.conversation ||
@@ -303,15 +376,18 @@ async function startWhatsApp() {
 
       if (!text) return;
 
-      saveMessage({
+      await saveMessage({
         jid,
         sender,
+        senderName,
+        displayName: isGroup ? null : senderName,
         text,
         direction: "received"
       });
 
       console.log(isGroup ? "Mensagem de GRUPO salva:" : "Mensagem de CLIENTE salva:");
       console.log("JID:", jid);
+      console.log("Remetente:", senderName);
       console.log("Mensagem:", text);
     });
 
