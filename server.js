@@ -201,7 +201,17 @@ async function downloadWahaMedia(payload) {
     }
 
     if (payload.media?.url) {
-      const response = await fetch(payload.media.url);
+
+      let mediaUrl = payload.media.url;
+
+      mediaUrl = mediaUrl.replace(
+        "http://devlikeaprowaha.railway.internal",
+        WAHA_URL
+      );
+
+      console.log("⬇️ Baixando mídia WAHA:", mediaUrl);
+
+      const response = await fetch(mediaUrl);
       if (!response.ok) throw new Error(`Erro ao baixar mídia: ${response.status}`);
 
       const arrayBuffer = await response.arrayBuffer();
