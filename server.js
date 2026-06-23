@@ -518,6 +518,24 @@ app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid });
 });
 
+app.post("/waha-webhook", async (req, res) => {
+  try {
+    console.log("📩 WAHA WEBHOOK RECEBIDO:");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    return res.json({
+      sucesso: true,
+      recebido: true
+    });
+  } catch (error) {
+    console.error("Erro no /waha-webhook:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/mapear-telefone", async (req, res) => {
   const { lid, telefone } = req.body;
 
