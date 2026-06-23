@@ -221,6 +221,14 @@ async function getGroupName(jid) {
       return jid;
     }
 
+function getConversationList() {
+  return [...clientConversations, ...groupConversations].sort((a, b) => {
+    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+}
+    
     const data = await response.json();
 
     return (
