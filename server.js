@@ -1,22 +1,12 @@
-import express from "express";
+from pathlib import Path
+
+code = r'''import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import QRCode from "qrcode";
-import pino from "pino";
 import fs from "fs/promises";
-const WAHA_URL = process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
 import path from "path";
-import baileys from "@whiskeysockets/baileys";
 
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  DisconnectReason,
-  downloadMediaMessage
-} = baileys;
-
-console.log("######## STU ATENDIMENTO WHATSAPP V5 ########");
+console.log("######## STU ATENDIMENTO WHATSAPP V6 - WAHA MODE ########");
 
 const app = express();
 const server = http.createServer(app);
@@ -34,27 +24,37 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
-const AUTH_DIR = process.env.AUTH_DIR || "/app/data/auth_info_baileys";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
 const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
 
-let sock;
+const WAHA_URL =
+  process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
+const WAHA_SESSION = process.env.WAHA_SESSION || "default";
+
+let connectionStatus = "WAHA MODE ATIVO";
 let lastQr = null;
-let connectionStatus = "iniciando";
-let manualDisconnect = false;
 
 let clientConversations = [];
 let groupConversations = [];
 
 let lidToPhone = {};
 let phoneToLid = {};
+let groupNameCache = {};
+
+function getConversationList() {
+  return [...clientConversations, ...groupConversations].sort((a, b) => {
+    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
+    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+}
 
 function isGroupJid(jid = "") {
   return jid.endsWith("@g.us");
 }
 
 function isPhoneJid(jid = "") {
-  return jid.endsWith("@s.whatsapp.net");
+  return jid.endsWith("@s.whatsapp.net") || jid.endsWith("@c.us");
 }
 
 function isLidJid(jid = "") {
@@ -62,8 +62,9 @@ function isLidJid(jid = "") {
 }
 
 function cleanJid(jid = "") {
-  return jid
+  return String(jid)
     .replace("@s.whatsapp.net", "")
+    .replace("@c.us", "")
     .replace("@g.us", "")
     .replace("@lid", "");
 }
@@ -72,25 +73,16 @@ function normalizePhone(phone = "") {
   return String(phone).replace(/\D/g, "");
 }
 
-function getMessageType(message = {}) {
-  if (message.conversation || message.extendedTextMessage) return "text";
-  if (message.imageMessage) return "image";
-  if (message.audioMessage) return "audio";
-  if (message.videoMessage) return "video";
-  if (message.documentMessage) return "document";
-  if (message.stickerMessage) return "sticker";
-  return "unknown";
+function toInternalPhoneJid(jid = "") {
+  if (!jid) return jid;
+  if (jid.endsWith("@c.us")) return `${normalizePhone(cleanJid(jid))}@s.whatsapp.net`;
+  return jid;
 }
 
-function getTextFromMessage(message = {}) {
-  return (
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
-    message.documentMessage?.caption ||
-    ""
-  );
+function toWahaChatId(jid = "") {
+  if (!jid) return jid;
+  if (jid.endsWith("@s.whatsapp.net")) return `${normalizePhone(cleanJid(jid))}@c.us`;
+  return jid;
 }
 
 async function ensureDirs() {
@@ -105,10 +97,12 @@ async function loadLidMap() {
     const data = JSON.parse(raw);
     lidToPhone = data.lidToPhone || {};
     phoneToLid = data.phoneToLid || {};
+    groupNameCache = data.groupNameCache || {};
     console.log("Mapa LID carregado:", Object.keys(lidToPhone).length);
   } catch {
     lidToPhone = {};
     phoneToLid = {};
+    groupNameCache = {};
   }
 }
 
@@ -117,7 +111,7 @@ async function saveLidMap() {
     await ensureDirs();
     await fs.writeFile(
       LID_MAP_FILE,
-      JSON.stringify({ lidToPhone, phoneToLid }, null, 2)
+      JSON.stringify({ lidToPhone, phoneToLid, groupNameCache }, null, 2)
     );
   } catch (error) {
     console.error("Erro ao salvar mapa LID:", error);
@@ -141,8 +135,17 @@ async function mapLidToPhone(lidJid, phoneJid) {
     if (c.lid === lid || c.jid === lidJid) {
       c.realPhone = phone;
       c.telefone = phone;
+      c.clientPhone = phone;
       c.phoneUnavailableReason = null;
     }
+  });
+
+  groupConversations.forEach(c => {
+    c.messages.forEach(m => {
+      if (m.sender === lidJid) {
+        m.senderRealPhone = phone;
+      }
+    });
   });
 }
 
@@ -152,91 +155,119 @@ function findMappedPhone(jid = "") {
   return null;
 }
 
-function collectJidsFromObject(obj, found = new Set()) {
-  if (!obj || typeof obj !== "object") return found;
-
-  for (const value of Object.values(obj)) {
-    if (typeof value === "string") {
-      if (
-        value.endsWith("@s.whatsapp.net") ||
-        value.endsWith("@lid") ||
-        value.endsWith("@g.us")
-      ) {
-        found.add(value);
-      }
-    } else if (value && typeof value === "object") {
-      collectJidsFromObject(value, found);
-    }
-  }
-
-  return found;
+function getExtensionFromMime(mimeType = "") {
+  if (mimeType.includes("jpeg")) return "jpg";
+  if (mimeType.includes("png")) return "png";
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("mpeg")) return "mp3";
+  if (mimeType.includes("mp4")) return "mp4";
+  if (mimeType.includes("pdf")) return "pdf";
+  if (mimeType.includes("word")) return "docx";
+  if (mimeType.includes("excel") || mimeType.includes("spreadsheet")) return "xlsx";
+  return "bin";
 }
 
-async function learnPhonesFromMessage(msg) {
+async function saveBufferToMedia(buffer, originalName, mimeType) {
+  await ensureDirs();
+
+  const extension = getExtensionFromMime(mimeType);
+  const fallbackName = `${Date.now()}.${extension}`;
+  const safeOriginalName = (originalName || fallbackName).replace(/[^\w.\-]/g, "_");
+  const fileName = `${Date.now()}-${safeOriginalName}`;
+  const filePath = path.join(MEDIA_DIR, fileName);
+
+  await fs.writeFile(filePath, buffer);
+
+  return {
+    mediaUrl: `/media/${fileName}`,
+    mediaName: originalName || fileName,
+    mimeType,
+    fileSize: buffer.length
+  };
+}
+
+async function downloadWahaMedia(payload) {
   try {
-    const jids = [...collectJidsFromObject(msg)];
-    const lidJids = jids.filter(isLidJid);
-    const phoneJids = jids.filter(isPhoneJid);
-
-    for (const lid of lidJids) {
-      for (const phone of phoneJids) {
-        await mapLidToPhone(lid, phone);
-      }
+    if (!payload?.hasMedia && !payload?.media) {
+      return { mediaUrl: null, mediaName: null, mimeType: null, fileSize: null };
     }
 
-    const key = msg?.key || {};
-    if (key.participant && key.participantPn) {
-      await mapLidToPhone(key.participant, key.participantPn);
+    if (payload.media?.data) {
+      const buffer = Buffer.from(payload.media.data, "base64");
+      return await saveBufferToMedia(
+        buffer,
+        payload.media.filename || payload.media.fileName || `${payload.id}.${getExtensionFromMime(payload.media.mimetype || "")}`,
+        payload.media.mimetype || payload.media.mimeType || "application/octet-stream"
+      );
     }
 
-    if (key.remoteJid && key.remoteJidPn) {
-      await mapLidToPhone(key.remoteJid, key.remoteJidPn);
+    if (payload.media?.url) {
+      const response = await fetch(payload.media.url);
+      if (!response.ok) throw new Error(`Erro ao baixar mídia: ${response.status}`);
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const mimeType =
+        payload.media.mimetype ||
+        payload.media.mimeType ||
+        response.headers.get("content-type") ||
+        "application/octet-stream";
+
+      return await saveBufferToMedia(
+        buffer,
+        payload.media.filename || payload.media.fileName || `${payload.id}.${getExtensionFromMime(mimeType)}`,
+        mimeType
+      );
     }
 
-    if (key.senderLid && key.senderPn) {
-      await mapLidToPhone(key.senderLid, key.senderPn);
-    }
+    return { mediaUrl: null, mediaName: null, mimeType: null, fileSize: null };
   } catch (error) {
-    console.log("Não foi possível aprender telefone da mensagem:", error.message);
+    console.error("Erro ao salvar mídia WAHA:", error);
+    return { mediaUrl: null, mediaName: null, mimeType: null, fileSize: null };
   }
 }
 
 async function getProfilePicture(jid) {
-  try {
-    if (!sock) return null;
-    return await sock.profilePictureUrl(jid, "image");
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 async function getGroupName(jid) {
   try {
     if (!jid || !jid.endsWith("@g.us")) return jid;
 
-    const response = await fetch(`${WAHA_URL}/api/default/groups/${encodeURIComponent(jid)}`);
+    if (groupNameCache[jid]) return groupNameCache[jid];
 
-    if (!response.ok) {
-      console.log("Não foi possível buscar nome do grupo no WAHA:", response.status);
-      return jid;
+    const endpoints = [
+      `${WAHA_URL}/api/${WAHA_SESSION}/groups/${encodeURIComponent(jid)}`,
+      `${WAHA_URL}/api/groups/${encodeURIComponent(jid)}?session=${WAHA_SESSION}`,
+      `${WAHA_URL}/api/groups/${encodeURIComponent(jid)}`
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) continue;
+
+        const data = await response.json();
+
+        const name =
+          data.subject ||
+          data.name ||
+          data.groupName ||
+          data?.groupMetadata?.subject ||
+          data?.metadata?.subject ||
+          null;
+
+        if (name) {
+          groupNameCache[jid] = name;
+          await saveLidMap();
+          return name;
+        }
+      } catch {}
     }
 
-function getConversationList() {
-  return [...clientConversations, ...groupConversations].sort((a, b) => {
-    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
-    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
-    return dateB - dateA;
-  });
-}
-    
-    const data = await response.json();
-
-    return (
-      data.subject ||
-      data.name ||
-      data.groupMetadata?.subject ||
-      jid
-    );
+    return jid;
   } catch (error) {
     console.log("Erro ao buscar nome do grupo no WAHA:", error.message);
     return jid;
@@ -247,7 +278,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
   if (isGroup) {
     let groupChat = groupConversations.find(c => c.jid === jid);
 
-    const groupName = await getGroupName(jid);
+    const groupName = displayName && displayName !== jid ? displayName : await getGroupName(jid);
     const profilePictureUrl = await getProfilePicture(jid);
 
     if (!groupChat) {
@@ -275,8 +306,8 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
 
       groupConversations.push(groupChat);
     } else {
-      groupChat.name = groupName;
-      groupChat.clientName = groupName;
+      groupChat.name = groupName || groupChat.name || jid;
+      groupChat.clientName = groupChat.name;
       groupChat.profilePictureUrl = profilePictureUrl || groupChat.profilePictureUrl || null;
       groupChat.avatarUrl = groupChat.profilePictureUrl;
     }
@@ -303,7 +334,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       clientPhone,
       realPhone,
       telefone: realPhone,
-      phoneUnavailableReason: realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys",
+      phoneUnavailableReason: realPhone ? null : "Número real não disponível",
       profilePictureUrl,
       avatarUrl: profilePictureUrl,
       conversationType: "cliente",
@@ -326,7 +357,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     clientChat.realPhone = realPhone;
     clientChat.telefone = realPhone;
     clientChat.lid = lid;
-    clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível pelo WhatsApp/Baileys";
+    clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível";
     clientChat.profilePictureUrl = profilePictureUrl || clientChat.profilePictureUrl || null;
     clientChat.avatarUrl = clientChat.profilePictureUrl;
   }
@@ -405,6 +436,60 @@ async function saveMessage({
   return newMessage;
 }
 
+async function markDeletedMessage(jid, deletedWaMessageId) {
+  const internalJid = toInternalPhoneJid(jid);
+  const list = isGroupJid(internalJid) ? groupConversations : clientConversations;
+  const chat = list.find(c => c.jid === internalJid);
+
+  if (!chat) return false;
+
+  const message = chat.messages.find(m => m.waMessageId === deletedWaMessageId);
+
+  if (message) {
+    message.deletedInWhatsApp = true;
+    message.preservedInSystem = true;
+    message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
+    message.updatedAt = new Date().toISOString();
+
+    io.emit("mensagemApagada", { jid: internalJid, waMessageId: deletedWaMessageId, message, conversation: chat });
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return true;
+  }
+
+  await saveMessage({
+    jid: internalJid,
+    sender: "sistema",
+    senderName: "Sistema",
+    text: "Uma mensagem foi apagada no WhatsApp, mas não foi encontrada no histórico local.",
+    direction: "system",
+    system: true
+  });
+
+  return false;
+}
+
+function detectarTipoMidia(payload = {}) {
+  if (!payload?.hasMedia && !payload?.media) return "none";
+
+  const mime =
+    payload.media?.mimetype ||
+    payload.media?.mimeType ||
+    payload._data?.message?.imageMessage?.mimetype ||
+    payload._data?.message?.audioMessage?.mimetype ||
+    payload._data?.message?.videoMessage?.mimetype ||
+    payload._data?.message?.documentMessage?.mimetype ||
+    "";
+
+  if (payload._data?.message?.imageMessage || mime.startsWith("image/")) return "image";
+  if (payload._data?.message?.audioMessage || mime.startsWith("audio/")) return "audio";
+  if (payload._data?.message?.videoMessage || mime.startsWith("video/")) return "video";
+  if (payload._data?.message?.stickerMessage) return "sticker";
+  if (payload._data?.message?.documentMessage || payload.media) return "document";
+
+  return "document";
+}
+
 async function processarMensagemWaha(body) {
   const event = body.event;
   const payload = body.payload || {};
@@ -418,32 +503,39 @@ async function processarMensagemWaha(body) {
 
   if (!rawJid) return;
   if (rawJid === "status@broadcast") return;
+  if (payload._data?.broadcast === true) return;
 
   const isGroup = rawJid.endsWith("@g.us");
 
-  let jid = rawJid;
-let sender = rawJid;
-let displayName = payload._data?.pushName || payload.pushName || rawJid;
+  let jid = toInternalPhoneJid(rawJid);
+  let sender = jid;
+  let senderName = payload._data?.pushName || payload.pushName || jid;
+  let displayName = senderName;
 
-if (isGroup) {
-  sender =
-    payload.participant ||
-    payload._data?.key?.participant ||
-    rawJid;
+  if (isGroup) {
+    jid = rawJid;
 
-  const participantAlt =
-    payload._data?.key?.participantAlt ||
-    null;
+    sender =
+      payload.participant ||
+      payload._data?.key?.participant ||
+      rawJid;
 
-  if (participantAlt && participantAlt.endsWith("@s.whatsapp.net")) {
-    await mapLidToPhone(sender, participantAlt);
-    sender = participantAlt;
-  }
+    const participantAlt =
+      payload._data?.key?.participantAlt ||
+      null;
 
-  displayName = rawJid;
-}
+    if (participantAlt && isPhoneJid(participantAlt)) {
+      await mapLidToPhone(sender, participantAlt);
+      sender = toInternalPhoneJid(participantAlt);
+    }
 
-  if (!isGroup && altJid && altJid.endsWith("@s.whatsapp.net")) {
+    senderName =
+      payload._data?.pushName ||
+      payload.pushName ||
+      sender;
+
+    displayName = await getGroupName(rawJid);
+  } else if (altJid && isPhoneJid(altJid)) {
     await mapLidToPhone(rawJid, altJid);
 
     const telefone = normalizePhone(cleanJid(altJid));
@@ -455,124 +547,63 @@ if (isGroup) {
     payload.body ||
     payload._data?.message?.conversation ||
     payload._data?.message?.extendedTextMessage?.text ||
+    payload._data?.message?.imageMessage?.caption ||
+    payload._data?.message?.videoMessage?.caption ||
+    payload._data?.message?.documentMessage?.caption ||
     "";
 
-  await saveMessage({
-    jid,
-    sender,
-    senderName: displayName,
-    displayName,
-    text,
-    direction: "received",
-    waMessageId: payload._data?.key?.id || payload.id,
-    mediaType: "none",
+  const mediaType = detectarTipoMidia(payload);
+  let mediaInfo = {
     mediaUrl: null,
     mediaName: null,
     mimeType: null,
     fileSize: null
+  };
+
+  if (mediaType !== "none") {
+    mediaInfo = await downloadWahaMedia(payload);
+  }
+
+  await saveMessage({
+    jid,
+    sender,
+    senderName,
+    displayName,
+    text,
+    direction: "received",
+    waMessageId: payload._data?.key?.id || payload.id,
+    mediaType,
+    mediaUrl: mediaInfo.mediaUrl,
+    mediaName: mediaInfo.mediaName,
+    mimeType: mediaInfo.mimeType,
+    fileSize: mediaInfo.fileSize
   });
 
   console.log("✅ Mensagem WAHA salva:", {
     jid,
     sender,
+    senderName,
     displayName,
-    text
+    text,
+    mediaType
   });
 }
 
-async function markDeletedMessage(jid, deletedWaMessageId) {
-  const list = isGroupJid(jid) ? groupConversations : clientConversations;
-  const chat = list.find(c => c.jid === jid);
-
-  if (!chat) return false;
-
-  const message = chat.messages.find(m => m.waMessageId === deletedWaMessageId);
-
-  if (message) {
-    message.deletedInWhatsApp = true;
-    message.preservedInSystem = true;
-    message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
-    message.updatedAt = new Date().toISOString();
-
-    io.emit("mensagemApagada", { jid, waMessageId: deletedWaMessageId, message, conversation: chat });
-    io.emit("conversasAtualizadas", getConversationList());
-
-    return true;
-  }
-
-  await saveMessage({
-    jid,
-    sender: "sistema",
-    senderName: "Sistema",
-    text: "Uma mensagem foi apagada no WhatsApp, mas não foi encontrada no histórico local.",
-    direction: "system",
-    system: true
-  });
-
-  return false;
-}
-
-function getExtensionFromMime(mimeType = "") {
-  if (mimeType.includes("jpeg")) return "jpg";
-  if (mimeType.includes("png")) return "png";
-  if (mimeType.includes("webp")) return "webp";
-  if (mimeType.includes("ogg")) return "ogg";
-  if (mimeType.includes("mpeg")) return "mp3";
-  if (mimeType.includes("mp4")) return "mp4";
-  if (mimeType.includes("pdf")) return "pdf";
-  if (mimeType.includes("word")) return "docx";
-  if (mimeType.includes("excel") || mimeType.includes("spreadsheet")) return "xlsx";
-  return "bin";
-}
-
-async function saveBufferToMedia(buffer, originalName, mimeType) {
-  await ensureDirs();
-
-  const extension = getExtensionFromMime(mimeType);
-  const fallbackName = `${Date.now()}.${extension}`;
-  const safeOriginalName = (originalName || fallbackName).replace(/[^\w.\-]/g, "_");
-  const fileName = `${Date.now()}-${safeOriginalName}`;
-  const filePath = path.join(MEDIA_DIR, fileName);
-
-  await fs.writeFile(filePath, buffer);
-
-  return {
-    mediaUrl: `/media/${fileName}`,
-    mediaName: originalName || fileName,
-    mimeType,
-    fileSize: buffer.length
-  };
-}
-
-async function saveIncomingMedia(msg) {
+async function processarMensagemApagadaWaha(body) {
   try {
-    const buffer = await downloadMediaMessage(
-      msg,
-      "buffer",
-      {},
-      {
-        logger: pino({ level: "silent" }),
-        reuploadRequest: sock?.updateMediaMessage
-      }
-    );
+    const payload = body.payload || {};
+    const rawJid = payload.from || payload.chatId || payload._data?.key?.remoteJid;
+    const deletedId =
+      payload.id ||
+      payload.messageId ||
+      payload._data?.protocolMessage?.key?.id ||
+      payload._data?.key?.id;
 
-    const message = msg.message || {};
-    const mediaMessage =
-      message.imageMessage ||
-      message.audioMessage ||
-      message.videoMessage ||
-      message.documentMessage ||
-      message.stickerMessage;
+    if (!rawJid || !deletedId) return;
 
-    const mimeType = mediaMessage?.mimetype || "application/octet-stream";
-    const originalName =
-      mediaMessage?.fileName ||
-      `${msg.key.id}.${getExtensionFromMime(mimeType)}`;
-
-    return await saveBufferToMedia(buffer, originalName, mimeType);
+    await markDeletedMessage(rawJid, deletedId);
   } catch (error) {
-    console.error("Erro ao salvar mídia recebida:", error);
-    return { mediaUrl: null, mediaName: null, mimeType: null, fileSize: null };
+    console.error("Erro ao processar mensagem apagada WAHA:", error);
   }
 }
 
@@ -581,7 +612,10 @@ app.use("/media", express.static(MEDIA_DIR));
 app.get("/status", (req, res) => {
   res.json({
     status: connectionStatus,
-    whatsappConectado: !!sock && connectionStatus.includes("conectado"),
+    whatsappConectado: true,
+    modo: "WAHA",
+    wahaUrl: WAHA_URL,
+    session: WAHA_SESSION,
     qrDisponivel: !!lastQr,
     clientes: clientConversations.length,
     grupos: groupConversations.length,
@@ -606,7 +640,7 @@ app.get("/conversas", (req, res) => {
 });
 
 app.get("/lid-map", (req, res) => {
-  res.json({ lidToPhone, phoneToLid });
+  res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
 
 app.post("/waha-webhook", async (req, res) => {
@@ -614,7 +648,17 @@ app.post("/waha-webhook", async (req, res) => {
     console.log("📩 WAHA WEBHOOK RECEBIDO:");
     console.log(JSON.stringify(req.body, null, 2));
 
-    await processarMensagemWaha(req.body);
+    if (req.body?.event === "message") {
+      await processarMensagemWaha(req.body);
+    }
+
+    if (
+      req.body?.event === "message.revoked" ||
+      req.body?.event === "message.reaction" ||
+      req.body?.event === "message.deleted"
+    ) {
+      await processarMensagemApagadaWaha(req.body);
+    }
 
     return res.json({
       sucesso: true,
@@ -656,22 +700,37 @@ app.post("/enviar", async (req, res) => {
       return res.status(400).json({ erro: "Informe jid e mensagem" });
     }
 
-    if (!sock) {
-      return res.status(503).json({ erro: "WhatsApp ainda não iniciado" });
+    const chatId = toWahaChatId(jid);
+
+    const response = await fetch(`${WAHA_URL}/api/sendText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: WAHA_SESSION,
+        chatId,
+        text: mensagem
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        erro: "Erro ao enviar mensagem pelo WAHA",
+        detalhe: data
+      });
     }
 
-    const sent = await sock.sendMessage(jid, { text: mensagem });
-
     await saveMessage({
-      jid,
+      jid: toInternalPhoneJid(jid),
       sender: "sistema",
       senderName: "STU Atendimento",
       text: mensagem,
       direction: "sent",
-      waMessageId: sent?.key?.id || null
+      waMessageId: data?.id || data?.key?.id || null
     });
 
-    res.json({ sucesso: true, jid, mensagem });
+    res.json({ sucesso: true, jid: toInternalPhoneJid(jid), mensagem, waha: data });
   } catch (error) {
     console.error("Erro ao enviar mensagem:", error);
     res.status(500).json({ erro: "Erro ao enviar mensagem", detalhe: error.message });
@@ -686,10 +745,6 @@ app.post("/enviar-midia", async (req, res) => {
       return res.status(400).json({ erro: "Informe jid, mediaType e base64" });
     }
 
-    if (!sock) {
-      return res.status(503).json({ erro: "WhatsApp ainda não iniciado" });
-    }
-
     const buffer = Buffer.from(base64, "base64");
 
     const savedMedia = await saveBufferToMedia(
@@ -698,108 +753,46 @@ app.post("/enviar-midia", async (req, res) => {
       mimeType || "application/octet-stream"
     );
 
-    let payload;
-
-    if (mediaType === "image") {
-      payload = { image: buffer, caption: caption || "" };
-    } else if (mediaType === "audio") {
-      payload = { audio: buffer, mimetype: mimeType || "audio/ogg", ptt: true };
-    } else if (mediaType === "video") {
-      payload = { video: buffer, caption: caption || "" };
-    } else if (mediaType === "document") {
-      payload = {
-        document: buffer,
-        mimetype: mimeType || "application/octet-stream",
-        fileName: fileName || "arquivo"
-      };
-    } else {
-      return res.status(400).json({
-        erro: "mediaType inválido. Use image, audio, video ou document"
-      });
-    }
-
-    const sent = await sock.sendMessage(jid, payload);
-
-    const message = await saveMessage({
-      jid,
-      sender: "sistema",
-      senderName: "STU Atendimento",
-      text: caption || "",
-      direction: "sent",
-      waMessageId: sent?.key?.id || null,
-      mediaType,
-      mediaUrl: savedMedia.mediaUrl,
-      mediaName: savedMedia.mediaName,
-      mimeType: savedMedia.mimeType,
-      fileSize: savedMedia.fileSize
-    });
-
-    res.json({
-      sucesso: true,
-      jid,
-      mediaType,
-      mediaUrl: savedMedia.mediaUrl,
-      mediaName: savedMedia.mediaName,
-      mimeType: savedMedia.mimeType,
-      fileSize: savedMedia.fileSize,
-      message
+    res.status(501).json({
+      sucesso: false,
+      erro: "Envio de mídia pelo WAHA ainda será ligado no próximo passo.",
+      mediaLocalSalva: savedMedia,
+      dica: "Recebimento de mídia já está preparado; envio será ajustado após confirmar endpoint correto do WAHA."
     });
   } catch (error) {
-    console.error("Erro ao enviar mídia:", error);
-    res.status(500).json({ erro: "Erro ao enviar mídia", detalhe: error.message });
+    console.error("Erro ao preparar mídia:", error);
+    res.status(500).json({ erro: "Erro ao preparar mídia", detalhe: error.message });
   }
 });
 
 app.post("/desconectar", async (req, res) => {
-  try {
-    manualDisconnect = true;
-
-    try {
-      if (sock) await sock.logout();
-    } catch (error) {
-      console.log("Logout retornou erro, continuando limpeza:", error.message);
-    }
-
-    sock = null;
-    lastQr = null;
-    connectionStatus = "🔴 WhatsApp desconectado. Gerando novo QR Code...";
-    io.emit("status", { status: connectionStatus });
-
-    await fs.rm(AUTH_DIR, { recursive: true, force: true });
-
-    setTimeout(() => {
-      manualDisconnect = false;
-      startWhatsApp();
-    }, 2000);
-
-    res.json({ sucesso: true, mensagem: "Sessão desconectada. Um novo QR Code será gerado." });
-  } catch (error) {
-    console.error("Erro ao desconectar:", error);
-    res.status(500).json({ erro: "Erro ao desconectar", detalhe: error.message });
-  }
+  res.json({
+    sucesso: false,
+    mensagem: "Este serviço está em modo WAHA. A desconexão deve ser feita no serviço WAHA."
+  });
 });
 
 app.get("/", (req, res) => {
   res.send(`
     <html>
       <head>
-        <title>STU WhatsApp</title>
+        <title>STU WhatsApp - WAHA</title>
         <style>
           body { font-family: Arial; background:#f4f7fb; padding:40px; }
-          .card { background:white; padding:30px; border-radius:16px; max-width:520px; margin:auto; box-shadow:0 10px 30px #0001; text-align:center; }
-          img { max-width:280px; margin:20px auto; display:block; }
-          .status { font-size:18px; font-weight:bold; margin:20px; }
-          button { padding:12px 18px; border:0; border-radius:10px; background:#1f8f5f; color:white; cursor:pointer; margin:4px; }
-          .danger { background:#b91c1c; }
+          .card { background:white; padding:30px; border-radius:16px; max-width:620px; margin:auto; box-shadow:0 10px 30px #0001; text-align:center; }
+          .status { font-size:18px; font-weight:bold; margin:20px; color:#166534; }
+          a { display:block; margin:10px; color:#2563eb; }
         </style>
       </head>
       <body>
         <div class="card">
           <h2>STU Atendimento WhatsApp</h2>
-          <div class="status" id="status">Carregando...</div>
-          <div id="qr"></div>
-          <button onclick="location.reload()">Atualizar</button>
-          <button class="danger" onclick="desconectar()">Desconectar conta</button>
+          <div class="status">WAHA MODE ATIVO</div>
+          <p>O WhatsApp agora é controlado pelo serviço WAHA.</p>
+          <a href="/status">/status</a>
+          <a href="/clientes">/clientes</a>
+          <a href="/grupos">/grupos</a>
+          <a href="/conversas">/conversas</a>
         </div>
 
         <script src="/socket.io/socket.io.js"></script>
@@ -807,20 +800,18 @@ app.get("/", (req, res) => {
           const socket = io();
 
           socket.on("status", data => {
-            document.getElementById("status").innerText = data.status;
+            console.log("status", data);
           });
 
-          socket.on("qr", data => {
-            document.getElementById("qr").innerHTML = data.qrImage ? '<img src="' + data.qrImage + '" />' : '';
+          socket.on("novaMensagem", data => {
+            console.log("novaMensagem", data);
+          });
+
+          socket.on("conversasAtualizadas", data => {
+            console.log("conversasAtualizadas", data);
           });
 
           socket.emit("get-current");
-
-          async function desconectar() {
-            if (!confirm("Deseja desconectar esta conta e gerar um novo QR Code?")) return;
-            await fetch("/desconectar", { method: "POST" });
-            setTimeout(() => location.reload(), 3000);
-          }
         </script>
       </body>
     </html>
@@ -829,212 +820,24 @@ app.get("/", (req, res) => {
 
 io.on("connection", (client) => {
   client.emit("status", { status: connectionStatus });
-
-  if (lastQr) {
-    client.emit("qr", { qrImage: lastQr });
-  }
-
   client.emit("conversasAtualizadas", getConversationList());
 
   client.on("get-current", () => {
     client.emit("status", { status: connectionStatus });
-
-    if (lastQr) {
-      client.emit("qr", { qrImage: lastQr });
-    }
-
     client.emit("conversasAtualizadas", getConversationList());
   });
 });
 
-async function startWhatsApp() {
-  try {
-    connectionStatus = "Conectando ao WhatsApp...";
-    io.emit("status", { status: connectionStatus });
+server.listen(PORT, async () => {
+  await ensureDirs();
+  await loadLidMap();
 
-    await ensureDirs();
-    await loadLidMap();
-
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version } = await fetchLatestBaileysVersion();
-
-    sock = makeWASocket({
-      version,
-      auth: state,
-      logger: pino({ level: "warn" }),
-      browser: ["STU Atendimento", "Chrome", "1.0.0"],
-      syncFullHistory: false,
-      markOnlineOnConnect: false,
-      printQRInTerminal: false
-    });
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("contacts.update", async (contacts) => {
-      try {
-        for (const contact of contacts || []) {
-          const jids = [...collectJidsFromObject(contact)];
-          const lids = jids.filter(isLidJid);
-          const phones = jids.filter(isPhoneJid);
-
-          for (const lid of lids) {
-            for (const phone of phones) {
-              await mapLidToPhone(lid, phone);
-            }
-          }
-        }
-      } catch (error) {
-        console.log("Erro em contacts.update:", error.message);
-      }
-    });
-
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        console.log("QR gerado.");
-        connectionStatus = "QR Code gerado. Escaneie no WhatsApp.";
-        lastQr = await QRCode.toDataURL(qr);
-        io.emit("status", { status: connectionStatus });
-        io.emit("qr", { qrImage: lastQr });
-      }
-
-      if (connection === "open") {
-        console.log("WhatsApp conectado com sucesso.");
-        connectionStatus = "🟢 WhatsApp conectado";
-        lastQr = null;
-        io.emit("status", { status: connectionStatus });
-        io.emit("qr", { qrImage: "" });
-      }
-
-      if (connection === "close") {
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        console.log("Conexão fechada. Código:", statusCode);
-
-        if (manualDisconnect) {
-          connectionStatus = "🔴 WhatsApp desconectado manualmente";
-          io.emit("status", { status: connectionStatus });
-          return;
-        }
-
-        if (statusCode === DisconnectReason.loggedOut) {
-          connectionStatus = "🔴 Sessão encerrada. Gere novo QR Code.";
-          io.emit("status", { status: connectionStatus });
-          return;
-        }
-
-        connectionStatus = "Reconectando...";
-        io.emit("status", { status: connectionStatus });
-
-        setTimeout(() => {
-          startWhatsApp();
-        }, 5000);
-      }
-    });
-
-    sock.ev.on("call", async (calls) => {
-      try {
-        for (const call of calls || []) {
-          const jid = call.from;
-
-          await saveMessage({
-            jid,
-            sender: jid,
-            senderName: "Chamada WhatsApp",
-            text: "Chamada recebida e não atendida pelo sistema.",
-            direction: "system",
-            system: true
-          });
-
-          if (typeof sock.rejectCall === "function" && call.id && call.from) {
-            try {
-              await sock.rejectCall(call.id, call.from);
-            } catch {
-              console.log("Não foi possível rejeitar chamada automaticamente.");
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Erro ao tratar chamada:", error);
-      }
-    });
-
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
-
-      for (const msg of messages || []) {
-        if (!msg?.message) continue;
-        if (msg.key.fromMe) continue;
-
-        await learnPhonesFromMessage(msg);
-
-        const jid = msg.key.remoteJid;
-
-        if (jid === "status@broadcast") continue;
-        if (msg.message.senderKeyDistributionMessage) continue;
-
-        if (msg.message.protocolMessage) {
-          const protocol = msg.message.protocolMessage;
-          const deletedId = protocol?.key?.id;
-
-          if (deletedId) await markDeletedMessage(jid, deletedId);
-          continue;
-        }
-
-        const isGroup = isGroupJid(jid);
-        const sender = isGroup ? msg.key.participant : jid;
-        const senderName = msg.pushName || sender;
-
-        const messageType = getMessageType(msg.message);
-        const text = getTextFromMessage(msg.message);
-
-        let mediaInfo = {
-          mediaUrl: null,
-          mediaName: null,
-          mimeType: null,
-          fileSize: null
-        };
-
-        if (["image", "audio", "video", "document", "sticker"].includes(messageType)) {
-          mediaInfo = await saveIncomingMedia(msg);
-        }
-
-        if (!text && messageType === "text") continue;
-
-        await saveMessage({
-          jid,
-          sender,
-          senderName,
-          displayName: isGroup ? null : senderName,
-          text: text || "",
-          direction: "received",
-          waMessageId: msg.key.id,
-          mediaType: messageType === "text" ? "none" : messageType,
-          mediaUrl: mediaInfo.mediaUrl,
-          mediaName: mediaInfo.mediaName,
-          mimeType: mediaInfo.mimeType,
-          fileSize: mediaInfo.fileSize
-        });
-
-        console.log(isGroup ? "Mensagem de GRUPO salva:" : "Mensagem de CLIENTE salva:");
-        console.log("JID:", jid);
-        console.log("Remetente:", senderName);
-        console.log("Tipo:", messageType);
-        console.log("Telefone real mapeado:", findMappedPhone(sender || jid) || "não disponível");
-        console.log("Mensagem:", text || `[${messageType}]`);
-      }
-    });
-  } catch (error) {
-    console.error("Erro ao iniciar WhatsApp:", error);
-    connectionStatus = "Erro ao iniciar WhatsApp. Veja os logs.";
-    io.emit("status", { status: connectionStatus });
-
-    setTimeout(() => {
-      startWhatsApp();
-    }, 10000);
-  }
-}
-server.listen(PORT, () => {
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
+  console.log("WAHA_URL:", WAHA_URL);
+  console.log("WAHA_SESSION:", WAHA_SESSION);
 });
+'''
+path = Path('/mnt/data/server.js')
+path.write_text(code, encoding='utf-8')
+print(str(path))
