@@ -835,4 +835,3 @@ server.listen(PORT, async () => {
   console.log("WAHA_URL:", WAHA_URL);
   console.log("WAHA_SESSION:", WAHA_SESSION);
 });
-'''
