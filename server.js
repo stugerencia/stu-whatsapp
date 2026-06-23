@@ -615,7 +615,13 @@ async function processarMensagemApagadaWaha(body) {
   }
 }
 
-app.use("/media", express.static(MEDIA_DIR));
+app.use(
+  "/media",
+  express.static(MEDIA_DIR, {
+    maxAge: "30d",
+    immutable: true
+  })
+);
 
 app.get("/status", (req, res) => {
   res.json({
