@@ -1,6 +1,4 @@
-from pathlib import Path
-
-code = r'''import express from "express";
+import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import fs from "fs/promises";
@@ -838,6 +836,3 @@ server.listen(PORT, async () => {
   console.log("WAHA_SESSION:", WAHA_SESSION);
 });
 '''
-path = Path('/mnt/data/server.js')
-path.write_text(code, encoding='utf-8')
-print(str(path))
