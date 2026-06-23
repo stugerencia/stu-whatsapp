@@ -389,6 +389,63 @@ async function saveMessage({
   return newMessage;
 }
 
+async function processarMensagemWaha(body) {
+  const event = body.event;
+  const payload = body.payload || {};
+
+  if (event !== "message") return;
+  if (!payload) return;
+  if (payload.fromMe) return;
+
+  const rawJid = payload.from || payload._data?.key?.remoteJid;
+  const altJid = payload._data?.key?.remoteJidAlt;
+
+  if (!rawJid) return;
+  if (rawJid === "status@broadcast") return;
+
+  const isGroup = rawJid.endsWith("@g.us");
+
+  let jid = rawJid;
+  let sender = rawJid;
+  let displayName = payload._data?.pushName || payload.pushName || rawJid;
+
+  if (!isGroup && altJid && altJid.endsWith("@s.whatsapp.net")) {
+    await mapLidToPhone(rawJid, altJid);
+
+    const telefone = normalizePhone(cleanJid(altJid));
+    jid = `${telefone}@s.whatsapp.net`;
+    sender = jid;
+  }
+
+  const text =
+    payload.body ||
+    payload._data?.message?.conversation ||
+    payload._data?.message?.extendedTextMessage?.text ||
+    "";
+
+  await saveMessage({
+    jid,
+    sender,
+    senderName: displayName,
+    displayName,
+    text,
+    direction: "received",
+    waMessageId: payload._data?.key?.id || payload.id,
+    mediaType: "none",
+    mediaUrl: null,
+    mediaName: null,
+    mimeType: null,
+    fileSize: null
+  });
+
+  console.log("✅ Mensagem WAHA salva:", {
+    jid,
+    sender,
+    displayName,
+    text
+  });
+}
+
 async function markDeletedMessage(jid, deletedWaMessageId) {
   const list = isGroupJid(jid) ? groupConversations : clientConversations;
   const chat = list.find(c => c.jid === jid);
