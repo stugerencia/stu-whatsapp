@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import QRCode from "qrcode";
 import pino from "pino";
 import fs from "fs/promises";
+const WAHA_URL = process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
 import path from "path";
 import baileys from "@whiskeysockets/baileys";
 
