@@ -212,20 +212,27 @@ async function getProfilePicture(jid) {
 
 async function getGroupName(jid) {
   try {
-    if (!sock) return jid;
-    const metadata = await sock.groupMetadata(jid);
-    return metadata?.subject || jid;
-  } catch {
+    if (!jid || !jid.endsWith("@g.us")) return jid;
+
+    const response = await fetch(`${WAHA_URL}/api/default/groups/${encodeURIComponent(jid)}`);
+
+    if (!response.ok) {
+      console.log("Não foi possível buscar nome do grupo no WAHA:", response.status);
+      return jid;
+    }
+
+    const data = await response.json();
+
+    return (
+      data.subject ||
+      data.name ||
+      data.groupMetadata?.subject ||
+      jid
+    );
+  } catch (error) {
+    console.log("Erro ao buscar nome do grupo no WAHA:", error.message);
     return jid;
   }
-}
-
-function getConversationList() {
-  return [...clientConversations, ...groupConversations].sort((a, b) => {
-    const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
-    const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
-    return dateB - dateA;
-  });
 }
 
 async function getOrCreateConversation(jid, isGroup, displayName = null) {
