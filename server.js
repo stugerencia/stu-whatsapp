@@ -406,8 +406,26 @@ async function processarMensagemWaha(body) {
   const isGroup = rawJid.endsWith("@g.us");
 
   let jid = rawJid;
-  let sender = rawJid;
-  let displayName = payload._data?.pushName || payload.pushName || rawJid;
+let sender = rawJid;
+let displayName = payload._data?.pushName || payload.pushName || rawJid;
+
+if (isGroup) {
+  sender =
+    payload.participant ||
+    payload._data?.key?.participant ||
+    rawJid;
+
+  const participantAlt =
+    payload._data?.key?.participantAlt ||
+    null;
+
+  if (participantAlt && participantAlt.endsWith("@s.whatsapp.net")) {
+    await mapLidToPhone(sender, participantAlt);
+    sender = participantAlt;
+  }
+
+  displayName = rawJid;
+}
 
   if (!isGroup && altJid && altJid.endsWith("@s.whatsapp.net")) {
     await mapLidToPhone(rawJid, altJid);
