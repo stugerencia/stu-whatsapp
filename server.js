@@ -923,8 +923,7 @@ async function startWhatsApp() {
     }, 10000);
   }
 }
-
 server.listen(PORT, () => {
   console.log("Servidor rodando na porta", PORT);
-  startWhatsApp();
+  console.log("WAHA MODE ATIVO - Baileys desativado");
 });
