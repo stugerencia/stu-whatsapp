@@ -594,13 +594,6 @@ app.post("/waha-webhook", async (req, res) => {
     });
   }
 });
-    console.error("Erro no /waha-webhook:", error);
-    return res.status(500).json({
-      sucesso: false,
-      erro: error.message
-    });
-  }
-});
 
 app.post("/mapear-telefone", async (req, res) => {
   const { lid, telefone } = req.body;
