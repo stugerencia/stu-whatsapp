@@ -580,11 +580,20 @@ app.post("/waha-webhook", async (req, res) => {
     console.log("📩 WAHA WEBHOOK RECEBIDO:");
     console.log(JSON.stringify(req.body, null, 2));
 
+    await processarMensagemWaha(req.body);
+
     return res.json({
       sucesso: true,
       recebido: true
     });
   } catch (error) {
+    console.error("Erro no /waha-webhook:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
     console.error("Erro no /waha-webhook:", error);
     return res.status(500).json({
       sucesso: false,
