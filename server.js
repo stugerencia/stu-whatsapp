@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import fs from "fs/promises";
 import path from "path";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 console.log("######## STU ATENDIMENTO WHATSAPP V6 - WAHA MODE ########");
 
@@ -29,6 +30,8 @@ const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
 const TAGS_FILE = path.join(DATA_DIR, "tags.json");
 const QUICK_MESSAGES_FILE = path.join(DATA_DIR, "quick_messages.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
+const JWT_SECRET = process.env.JWT_SECRET || "stu_atendimento_whatsapp_secret_dev";
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "12h";
 
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
@@ -373,6 +376,21 @@ function publicUser(user) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   };
+}
+
+function generateToken(user) {
+  return jwt.sign(
+    {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    },
+    JWT_SECRET,
+    {
+      expiresIn: JWT_EXPIRES_IN
+    }
+  );
 }
 
 async function loadLidMap() {
