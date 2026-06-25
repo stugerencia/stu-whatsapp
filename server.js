@@ -2076,16 +2076,40 @@ app.get("/", (req, res) => {
 
 io.on("connection", (client) => {
   client.emit("status", { status: connectionStatus });
-  client.emit("conversasAtualizadas", getConversationList());
 
-  client.on("registrar-usuario", ({ userName, role }) => {
-    client.data.userName = userName;
-    client.data.role = role || "atendente";
+  client.on("authenticate", ({ token }) => {
+    try {
+      if (!token) {
+        client.emit("auth_error", {
+          sucesso: false,
+          erro: "Token não informado"
+        });
+        return;
+      }
 
-    client.emit(
-      "conversasAtualizadas",
-      getConversationListByUser(client.data.userName, client.data.role)
-    );
+      const decoded = jwt.verify(token, JWT_SECRET);
+
+      client.data.userName = decoded.name;
+      client.data.role = decoded.role;
+      client.data.userId = decoded.id;
+      client.data.email = decoded.email;
+
+      client.emit("auth_success", {
+        sucesso: true,
+        user: decoded
+      });
+
+      client.emit(
+        "conversasAtualizadas",
+        getConversationListByUser(decoded.name, decoded.role)
+      );
+
+    } catch (error) {
+      client.emit("auth_error", {
+        sucesso: false,
+        erro: "Token inválido ou expirado"
+      });
+    }
   });
 
   client.on("get-current", () => {
@@ -2097,11 +2121,13 @@ io.on("connection", (client) => {
         getConversationListByUser(client.data.userName, client.data.role)
       );
     } else {
-      client.emit("conversasAtualizadas", getConversationList());
+      client.emit("auth_error", {
+        sucesso: false,
+        erro: "Socket não autenticado"
+      });
     }
   });
-
-  });
+});
 
 server.listen(PORT, async () => {
   await ensureDirs();
