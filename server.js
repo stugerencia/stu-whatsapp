@@ -841,6 +841,80 @@ app.post("/finalizar-conversa", async (req, res) => {
       });
     }
 
+app.post("/transferir-conversa", async (req, res) => {
+  try {
+    const { jid, fromAttendant, toAttendant } = req.body;
+
+    if (!jid) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o jid da conversa"
+      });
+    }
+
+    if (!toAttendant) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o atendente de destino"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const atendenteOrigem = fromAttendant || conversa.attendant || "Sistema";
+
+    conversa.status = "em_atendimento";
+    conversa.attendant = toAttendant;
+    conversa.transferredAt = new Date().toISOString();
+    conversa.transferredBy = atendenteOrigem;
+    conversa.transferredTo = toAttendant;
+
+    if (!conversa.transfers) {
+      conversa.transfers = [];
+    }
+
+    conversa.transfers.push({
+      from: atendenteOrigem,
+      to: toAttendant,
+      date: conversa.transferredAt
+    });
+
+    addConversationHistory(conversa, "transferiu", atendenteOrigem, {
+      from: atendenteOrigem,
+      to: toAttendant,
+      status: "em_atendimento"
+    });
+
+    await saveConversations();
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return res.json({
+      sucesso: true,
+      jid,
+      status: conversa.status,
+      attendant: conversa.attendant,
+      transferredBy: conversa.transferredBy,
+      transferredTo: conversa.transferredTo,
+      transferredAt: conversa.transferredAt
+    });
+
+  } catch (error) {
+    console.error("Erro ao transferir conversa:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+    
     const conversa = getConversationList().find(c => c.jid === jid);
 
     if (!conversa) {
