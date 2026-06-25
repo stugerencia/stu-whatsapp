@@ -24,6 +24,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
 const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
+const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
 
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
@@ -86,6 +87,49 @@ function toWahaChatId(jid = "") {
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(MEDIA_DIR, { recursive: true });
+}
+
+async function loadConversations() {
+  try {
+    await ensureDirs();
+
+    const raw = await fs.readFile(CONVERSATIONS_FILE, "utf-8");
+    const data = JSON.parse(raw);
+
+    clientConversations = data.clientConversations || [];
+    groupConversations = data.groupConversations || [];
+
+    console.log("Conversas carregadas:", {
+      clientes: clientConversations.length,
+      grupos: groupConversations.length
+    });
+  } catch {
+    clientConversations = [];
+    groupConversations = [];
+  }
+}
+
+async function saveConversations() {
+  try {
+    await ensureDirs();
+
+    await fs.writeFile(
+      CONVERSATIONS_FILE,
+      JSON.stringify(
+        {
+          clientConversations,
+          groupConversations
+        },
+        null,
+        2
+      )
+    );
+
+    console.log("💾 Conversas salvas");
+
+  } catch (error) {
+    console.error("Erro ao salvar conversas:", error);
+  }
 }
 
 async function loadLidMap() {
@@ -417,6 +461,7 @@ async function saveMessage({
   };
 
   chat.messages.push(newMessage);
+  await saveConversations();
 
   if (mediaType === "audio") chat.lastMessage = "🎧 Áudio";
   else if (mediaType === "image") chat.lastMessage = "🖼️ Imagem";
@@ -844,6 +889,7 @@ io.on("connection", (client) => {
 
 server.listen(PORT, async () => {
   await ensureDirs();
+  await loadConversations();
   await loadLidMap();
 
   console.log("Servidor rodando na porta", PORT);
