@@ -737,10 +737,6 @@ app.post("/waha-webhook", async (req, res) => {
   await processarMensagemWaha(req.body);
 }
 
-if (req.body?.event === "message.any") {
-  console.log("ℹ️ Evento message.any ignorado para evitar duplicidade");
-}
-
     if (
       req.body?.event === "message.revoked" ||
       req.body?.event === "message.reaction" ||
