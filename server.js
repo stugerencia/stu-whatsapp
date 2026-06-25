@@ -1270,4 +1270,3 @@ io.on("connection", (client) => {
       client.emit("conversasAtualizadas", getConversationList());
     }
   });
-}
