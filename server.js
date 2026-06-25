@@ -3,6 +3,7 @@ import http from "http";
 import { Server } from "socket.io";
 import fs from "fs/promises";
 import path from "path";
+import bcrypt from "bcryptjs";
 
 console.log("######## STU ATENDIMENTO WHATSAPP V6 - WAHA MODE ########");
 
@@ -27,6 +28,7 @@ const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
 const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
 const TAGS_FILE = path.join(DATA_DIR, "tags.json");
 const QUICK_MESSAGES_FILE = path.join(DATA_DIR, "quick_messages.json");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
@@ -41,44 +43,7 @@ let groupConversations = [];
 let tags = [];
 let quickMessages = [];
 
-const users = [
-  {
-    id: 1,
-    name: "Samuel",
-    email: "samuel@samutransportes.com.br",
-    role: "admin"
-  },
-  {
-    id: 2,
-    name: "Renata",
-    email: "renata.pereira@samutransportes.com.br",
-    role: "admin"
-  },
-  {
-    id: 3,
-    name: "Allice",
-    email: "allice.mayra@samutransportes.com.br",
-    role: "atendente"
-  },
-  {
-    id: 4,
-    name: "Maria Eduarda",
-    email: "atendimento02@samutransportes.com.br",
-    role: "atendente"
-  },
-  {
-    id: 5,
-    name: "Bruna",
-    email: "atendimento03@samutransportes.com.br",
-    role: "atendente"
-  },
-  {
-    id: 6,
-    name: "Carolinne",
-    email: "atendimento04@samutransportes.com.br",
-    role: "atendente"
-  }
-];
+let users = [];
 
 let lidToPhone = {};
 let phoneToLid = {};
@@ -297,6 +262,105 @@ async function saveQuickMessages() {
   } catch (error) {
     console.error("Erro ao salvar mensagens rápidas:", error);
   }
+}
+
+async function loadUsers() {
+  try {
+    await ensureDirs();
+
+    const raw = await fs.readFile(USERS_FILE, "utf-8");
+
+    users = JSON.parse(raw);
+
+    console.log("Usuários carregados:", users.length);
+
+  } catch {
+    users = [];
+  }
+}
+
+
+async function saveUsers() {
+  try {
+    await ensureDirs();
+
+    await fs.writeFile(
+      USERS_FILE,
+      JSON.stringify(users, null, 2)
+    );
+
+    console.log("Usuários salvos");
+
+  } catch (error) {
+    console.error("Erro ao salvar usuários:", error);
+  }
+}
+
+async function ensureDefaultUsers() {
+  if (users.length > 0) return;
+
+  const defaultPassword = "123456";
+
+  users = [
+    {
+      id: 1,
+      name: "Samuel",
+      email: "samuel@samutransportes.com.br",
+      role: "admin",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 2,
+      name: "Renata",
+      email: "renata.pereira@samutransportes.com.br",
+      role: "admin",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 3,
+      name: "Allice",
+      email: "allice.mayra@samutransportes.com.br",
+      role: "admin",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 4,
+      name: "Maria Eduarda",
+      email: "atendimento02@samutransportes.com.br",
+      role: "atendente",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 5,
+      name: "Bruna",
+      email: "atendimento03@samutransportes.com.br",
+      role: "atendente",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 6,
+      name: "Carolinne",
+      email: "atendimento04@samutransportes.com.br",
+      role: "atendente",
+      active: true,
+      passwordHash: await bcrypt.hash(defaultPassword, 10),
+      createdAt: new Date().toISOString()
+    }
+  ];
+
+  await saveUsers();
+
+  console.log("Usuários padrão criados com senha inicial 123456");
 }
 
 async function loadLidMap() {
@@ -1721,6 +1785,8 @@ server.listen(PORT, async () => {
   await loadLidMap();
   await loadTags();
   await loadQuickMessages();
+  await loadUsers();
+  await ensureDefaultUsers();
 
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
