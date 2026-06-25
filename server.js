@@ -1092,7 +1092,7 @@ app.get("/conversas-usuario", (req, res) => {
     conversas
   });
 });
-app.post("/marcar-lida", async (req, res) => {
+app.post("/marcar-lida", authenticateToken, async (req, res) => {
   try {
     const { jid } = req.body;
 
@@ -1137,7 +1137,7 @@ app.post("/marcar-lida", async (req, res) => {
   }
 });
 
-app.post("/assumir-conversa", async (req, res) => {
+app.post("/assumir-conversa", authenticateToken, async (req, res) => {
   try {
     const { jid, attendant } = req.body;
 
@@ -1199,7 +1199,7 @@ addConversationHistory(conversa, "assumiu", attendant, {
   }
 });
 
-app.post("/finalizar-conversa", async (req, res) => {
+app.post("/finalizar-conversa", authenticateToken, async (req, res) => {
   try {
     const { jid, attendant } = req.body;
 
@@ -1253,7 +1253,7 @@ app.post("/finalizar-conversa", async (req, res) => {
   }
 });
 
-app.post("/transferir-conversa", async (req, res) => {
+app.post("/transferir-conversa", authenticateToken, async (req, res) => {
   try {
     const { jid, fromAttendant, toAttendant } = req.body;
 
@@ -1335,7 +1335,7 @@ app.get("/mensagens-rapidas", (req, res) => {
   res.json(quickMessages);
 });
 
-app.post("/criar-mensagem-rapida", async (req, res) => {
+app.post("/criar-mensagem-rapida", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { title, shortcut, text } = req.body;
 
@@ -1383,7 +1383,7 @@ app.post("/criar-mensagem-rapida", async (req, res) => {
   }
 });
 
-app.post("/editar-mensagem-rapida", async (req, res) => {
+app.post("/editar-mensagem-rapida", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id, title, shortcut, text } = req.body;
 
@@ -1425,7 +1425,7 @@ app.post("/editar-mensagem-rapida", async (req, res) => {
   }
 });
 
-app.post("/excluir-mensagem-rapida", async (req, res) => {
+app.post("/excluir-mensagem-rapida", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.body;
 
@@ -1458,7 +1458,7 @@ app.get("/etiquetas", (req, res) => {
   res.json(tags);
 });
 
-app.post("/criar-etiqueta", async (req, res) => {
+app.post("/criar-etiqueta", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, color } = req.body;
 
@@ -1504,7 +1504,7 @@ app.post("/criar-etiqueta", async (req, res) => {
   }
 });
 
-app.post("/editar-etiqueta", async (req, res) => {
+app.post("/editar-etiqueta", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id, name, color } = req.body;
 
@@ -1544,7 +1544,7 @@ app.post("/editar-etiqueta", async (req, res) => {
   }
 });
 
-app.post("/excluir-etiqueta", async (req, res) => {
+app.post("/excluir-etiqueta", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.body;
 
@@ -1751,7 +1751,7 @@ app.post("/mapear-telefone", async (req, res) => {
   });
 });
 
-app.post("/enviar", async (req, res) => {
+app.post("/enviar", authenticateToken, async (req, res) => {
   try {
     const { jid, mensagem } = req.body;
 
