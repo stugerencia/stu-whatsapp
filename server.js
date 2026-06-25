@@ -719,6 +719,63 @@ app.post("/marcar-lida", async (req, res) => {
         sucesso: false,
         erro: "Informe o jid da conversa"
       });
+app.post("/assumir-conversa", async (req, res) => {
+  try {
+    const { jid, attendant } = req.body;
+
+    if (!jid) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o jid da conversa"
+      });
+    }
+
+    if (!attendant) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o nome do atendente"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    conversa.status = "em_atendimento";
+    conversa.attendant = attendant;
+    conversa.openedAt = conversa.openedAt || new Date().toISOString();
+    conversa.openedBy = attendant;
+    conversa.unreadCount = 0;
+
+    conversa.messages.forEach(msg => {
+      msg.read = true;
+    });
+
+    await saveConversations();
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return res.json({
+      sucesso: true,
+      jid,
+      status: conversa.status,
+      attendant: conversa.attendant,
+      openedAt: conversa.openedAt
+    });
+
+  } catch (error) {
+    console.error("Erro ao assumir conversa:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
     }
 
     const conversa = getConversationList().find(c => c.jid === jid);
