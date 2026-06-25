@@ -710,7 +710,50 @@ app.get("/grupos", (req, res) => {
 app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
+app.post("/marcar-lida", async (req, res) => {
+  try {
+    const { jid } = req.body;
 
+    if (!jid) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o jid da conversa"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    conversa.unreadCount = 0;
+
+    conversa.messages.forEach(msg => {
+      msg.read = true;
+    });
+
+    await saveConversations();
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return res.json({
+      sucesso: true,
+      jid,
+      unreadCount: 0
+    });
+
+  } catch (error) {
+    console.error("Erro ao marcar conversa como lida:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
 app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
