@@ -730,8 +730,13 @@ app.post("/waha-webhook", async (req, res) => {
         ignorado: "status_broadcast"
       });
     }
-    console.log("📩 WAHA WEBHOOK RECEBIDO:");
-    console.log(JSON.stringify(req.body, null, 2));
+    console.log("📩 WAHA:", {
+  event: req.body?.event,
+  from: req.body?.payload?.from,
+  name: req.body?.payload?._data?.pushName,
+  hasMedia: req.body?.payload?.hasMedia,
+  type: req.body?.payload?.media?.mimetype || "text"
+});
 
     if (req.body?.event === "message") {
   await processarMensagemWaha(req.body);
