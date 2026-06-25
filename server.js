@@ -812,7 +812,7 @@ app.post("/assumir-conversa", async (req, res) => {
       erro: error.message
     });
   }
-});});
+});
     }
 
     const conversa = getConversationList().find(c => c.jid === jid);
