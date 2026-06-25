@@ -648,15 +648,11 @@ async function processarMensagemWaha(body) {
     fileSize: mediaInfo.fileSize
   });
 
-  console.log("✅ Mensagem WAHA salva:", {
-    jid,
-    sender,
-    senderName,
-    displayName,
-    text,
-    mediaType
-  });
-}
+  console.log("✅ Mensagem salva:", {
+  tipo: isGroup ? "grupo" : "cliente",
+  nome: displayName,
+  midia: mediaType
+});
 
 async function processarMensagemApagadaWaha(body) {
   try {
