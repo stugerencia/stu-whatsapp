@@ -35,6 +35,44 @@ let lastQr = null;
 
 let clientConversations = [];
 let groupConversations = [];
+const users = [
+  {
+    id: 1,
+    name: "Samuel",
+    email: "samuel@samutransportes.com.br",
+    role: "admin"
+  },
+  {
+    id: 2,
+    name: "Renata",
+    email: "renata.pereira@samutransportes.com.br",
+    role: "admin"
+  },
+  {
+    id: 3,
+    name: "Allice",
+    email: "allice.mayra@samutransportes.com.br",
+    role: "atendente"
+  },
+  {
+    id: 4,
+    name: "Maria Eduarda",
+    email: "atendimento02@samutransportes.com.br",
+    role: "atendente"
+  },
+  {
+    id: 5,
+    name: "Bruna",
+    email: "atendimento03@samutransportes.com.br",
+    role: "atendente"
+  },
+  {
+    id: 6,
+    name: "Carolinne",
+    email: "atendimento04@samutransportes.com.br",
+    role: "atendente"
+  }
+];
 
 let lidToPhone = {};
 let phoneToLid = {};
@@ -47,6 +85,23 @@ function getConversationList() {
     const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
     const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
     return dateB - dateA;
+  });
+}
+
+function getConversationListByUser(userName, role = "atendente") {
+  const conversas = getConversationList();
+
+  if (role === "admin") {
+    return conversas;
+  }
+
+  return conversas.filter(c => {
+    return (
+      c.status === "nova" ||
+      c.attendant === userName ||
+      c.openedBy === userName ||
+      c.finishedBy === userName
+    );
   });
 }
 
@@ -722,6 +777,30 @@ app.get("/grupos", (req, res) => {
 
 app.get("/conversas", (req, res) => {
   res.json(getConversationList());
+});
+app.get("/usuarios", (req, res) => {
+  res.json(users);
+});
+app.get("/conversas-usuario", (req, res) => {
+  const userName = req.query.userName;
+  const role = req.query.role || "atendente";
+
+  if (!userName) {
+    return res.status(400).json({
+      sucesso: false,
+      erro: "Informe userName"
+    });
+  }
+
+  const conversas = getConversationListByUser(userName, role);
+
+  res.json({
+    sucesso: true,
+    userName,
+    role,
+    total: conversas.length,
+    conversas
+  });
 });
 app.post("/marcar-lida", async (req, res) => {
   try {
