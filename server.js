@@ -105,6 +105,19 @@ function getConversationListByUser(userName, role = "atendente") {
   });
 }
 
+function emitConversationsToConnectedUsers() {
+  for (const [socketId, socket] of io.sockets.sockets) {
+    const userName = socket.data?.userName;
+    const role = socket.data?.role || "atendente";
+
+    if (userName) {
+      socket.emit("conversasAtualizadas", getConversationListByUser(userName, role));
+    } else {
+      socket.emit("conversasAtualizadas", getConversationList());
+    }
+  }
+}
+
 function addConversationHistory(conversa, action, user, details = {}) {
   if (!conversa.history) {
     conversa.history = [];
@@ -568,7 +581,7 @@ async function saveMessage({
     conversas: getConversationList()
   });
 
-  io.emit("conversasAtualizadas", getConversationList());
+  emitConversationsToConnectedUsers();
 
   return newMessage;
 }
@@ -589,7 +602,7 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
     message.updatedAt = new Date().toISOString();
 
     io.emit("mensagemApagada", { jid: internalJid, waMessageId: deletedWaMessageId, message, conversation: chat });
-    io.emit("conversasAtualizadas", getConversationList());
+   emitConversationsToConnectedUsers();
 
     return true;
   }
@@ -830,7 +843,7 @@ app.post("/marcar-lida", async (req, res) => {
 
     await saveConversations();
 
-    io.emit("conversasAtualizadas", getConversationList());
+    emitConversationsToConnectedUsers();
 
     return res.json({
       sucesso: true,
@@ -890,7 +903,7 @@ addConversationHistory(conversa, "assumiu", attendant, {
 
     await saveConversations();
 
-    io.emit("conversasAtualizadas", getConversationList());
+    emitConversationsToConnectedUsers();
 
     return res.json({
       sucesso: true,
@@ -944,7 +957,7 @@ app.post("/finalizar-conversa", async (req, res) => {
 
     await saveConversations();
 
-    io.emit("conversasAtualizadas", getConversationList());
+   emitConversationsToConnectedUsers();
 
     return res.json({
       sucesso: true,
@@ -1016,7 +1029,7 @@ app.post("/transferir-conversa", async (req, res) => {
 
     await saveConversations();
 
-    io.emit("conversasAtualizadas", getConversationList());
+    emitConversationsToConnectedUsers();
 
     return res.json({
       sucesso: true,
@@ -1235,19 +1248,26 @@ io.on("connection", (client) => {
   client.emit("status", { status: connectionStatus });
   client.emit("conversasAtualizadas", getConversationList());
 
+  client.on("registrar-usuario", ({ userName, role }) => {
+    client.data.userName = userName;
+    client.data.role = role || "atendente";
+
+    client.emit(
+      "conversasAtualizadas",
+      getConversationListByUser(client.data.userName, client.data.role)
+    );
+  });
+
   client.on("get-current", () => {
     client.emit("status", { status: connectionStatus });
-    client.emit("conversasAtualizadas", getConversationList());
+
+    if (client.data?.userName) {
+      client.emit(
+        "conversasAtualizadas",
+        getConversationListByUser(client.data.userName, client.data.role)
+      );
+    } else {
+      client.emit("conversasAtualizadas", getConversationList());
+    }
   });
-});
-
-server.listen(PORT, async () => {
-  await ensureDirs();
-  await loadConversations();
-  await loadLidMap();
-
-  console.log("Servidor rodando na porta", PORT);
-  console.log("WAHA MODE ATIVO - Baileys desativado");
-  console.log("WAHA_URL:", WAHA_URL);
-  console.log("WAHA_SESSION:", WAHA_SESSION);
-});
+}
