@@ -575,14 +575,30 @@ async function saveMessage({
     chat.unreadCount = (chat.unreadCount || 0) + 1;
   }
 
-  io.emit("novaMensagem", {
-    conversation: chat,
-    message: newMessage,
-    conversas: getConversationList()
-  });
+  for (const [socketId, socket] of io.sockets.sockets) {
+  const userName = socket.data?.userName;
+  const role = socket.data?.role || "atendente";
 
-  emitConversationsToConnectedUsers();
+  let conversasPermitidas;
 
+  if (userName) {
+    conversasPermitidas = getConversationListByUser(userName, role);
+  } else {
+    conversasPermitidas = getConversationList();
+  }
+
+  const podeVerConversa = conversasPermitidas.some(c => c.jid === chat.jid);
+
+  if (podeVerConversa) {
+    socket.emit("novaMensagem", {
+      conversation: chat,
+      message: newMessage,
+      conversas: conversasPermitidas
+    });
+
+    socket.emit("conversasAtualizadas", conversasPermitidas);
+  }
+}
   return newMessage;
 }
 
