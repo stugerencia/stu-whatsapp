@@ -50,6 +50,19 @@ function getConversationList() {
   });
 }
 
+function addConversationHistory(conversa, action, user, details = {}) {
+  if (!conversa.history) {
+    conversa.history = [];
+  }
+
+  conversa.history.push({
+    action,
+    user: user || "Sistema",
+    date: new Date().toISOString(),
+    details
+  });
+}
+
 function isGroupJid(jid = "") {
   return jid.endsWith("@g.us");
 }
@@ -787,6 +800,10 @@ app.post("/assumir-conversa", async (req, res) => {
     conversa.openedAt = conversa.openedAt || new Date().toISOString();
     conversa.openedBy = attendant;
     conversa.unreadCount = 0;
+    
+addConversationHistory(conversa, "assumiu", attendant, {
+  status: "em_atendimento"
+});
 
     conversa.messages.forEach(msg => {
       msg.read = true;
@@ -837,6 +854,10 @@ app.post("/finalizar-conversa", async (req, res) => {
     conversa.finishedAt = new Date().toISOString();
     conversa.finishedBy = attendant || conversa.attendant || "Sistema";
     conversa.unreadCount = 0;
+
+addConversationHistory(conversa, "finalizou", conversa.finishedBy, {
+  status: "finalizada"
+});
 
     conversa.messages.forEach(msg => {
       msg.read = true;
