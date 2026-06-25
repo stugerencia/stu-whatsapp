@@ -720,6 +720,16 @@ app.get("/lid-map", (req, res) => {
 
 app.post("/waha-webhook", async (req, res) => {
   try {
+        const payload = req.body?.payload || {};
+    const from = payload.from || payload._data?.key?.remoteJid;
+
+    if (from === "status@broadcast" || payload._data?.broadcast === true) {
+      console.log("ℹ️ Status do WhatsApp ignorado");
+      return res.json({
+        sucesso: true,
+        ignorado: "status_broadcast"
+      });
+    }
     console.log("📩 WAHA WEBHOOK RECEBIDO:");
     console.log(JSON.stringify(req.body, null, 2));
 
