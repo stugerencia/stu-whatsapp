@@ -653,7 +653,8 @@ async function processarMensagemWaha(body) {
   nome: displayName,
   midia: mediaType
 });
-
+}
+  
 async function processarMensagemApagadaWaha(body) {
   try {
     const payload = body.payload || {};
