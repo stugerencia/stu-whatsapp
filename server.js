@@ -813,7 +813,6 @@ app.post("/assumir-conversa", async (req, res) => {
     });
   }
 });
-    }
 
     const conversa = getConversationList().find(c => c.jid === jid);
 
