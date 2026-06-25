@@ -1270,3 +1270,16 @@ io.on("connection", (client) => {
       client.emit("conversasAtualizadas", getConversationList());
     }
   });
+
+  });
+
+server.listen(PORT, async () => {
+  await ensureDirs();
+  await loadConversations();
+  await loadLidMap();
+
+  console.log("Servidor rodando na porta", PORT);
+  console.log("WAHA MODE ATIVO - Baileys desativado");
+  console.log("WAHA_URL:", WAHA_URL);
+  console.log("WAHA_SESSION:", WAHA_SESSION);
+});
