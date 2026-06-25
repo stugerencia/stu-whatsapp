@@ -393,6 +393,43 @@ function generateToken(user) {
   );
 }
 
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({
+      sucesso: false,
+      erro: "Token não informado"
+    });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    req.user = decoded;
+
+    next();
+
+  } catch (error) {
+    return res.status(403).json({
+      sucesso: false,
+      erro: "Token inválido ou expirado"
+    });
+  }
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({
+      sucesso: false,
+      erro: "Acesso permitido apenas para administradores"
+    });
+  }
+
+  next();
+}
+
 async function loadLidMap() {
   try {
     await ensureDirs();
@@ -972,9 +1009,10 @@ app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
 
-app.get("/usuarios", (req, res) => {
+app.get("/usuarios", authenticateToken, (req, res) => {
   res.json(users.map(publicUser));
 });
+
 app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
