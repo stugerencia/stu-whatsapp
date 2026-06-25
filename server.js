@@ -813,6 +813,56 @@ app.post("/assumir-conversa", async (req, res) => {
   }
 });
 
+app.post("/finalizar-conversa", async (req, res) => {
+  try {
+    const { jid, attendant } = req.body;
+
+    if (!jid) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o jid da conversa"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    conversa.status = "finalizada";
+    conversa.finishedAt = new Date().toISOString();
+    conversa.finishedBy = attendant || conversa.attendant || "Sistema";
+    conversa.unreadCount = 0;
+
+    conversa.messages.forEach(msg => {
+      msg.read = true;
+    });
+
+    await saveConversations();
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return res.json({
+      sucesso: true,
+      jid,
+      status: conversa.status,
+      finishedBy: conversa.finishedBy,
+      finishedAt: conversa.finishedAt
+    });
+
+  } catch (error) {
+    console.error("Erro ao finalizar conversa:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
