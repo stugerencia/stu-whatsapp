@@ -6,7 +6,7 @@ import path from "path";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-console.log("######## STU ATENDIMENTO WHATSAPP V6 - WAHA MODE ########");
+console.log("######## STU ATENDIMENTO WHATSAPP V7 - WAHA MODE ########");
 
 const app = express();
 const server = http.createServer(app);
