@@ -841,6 +841,49 @@ app.post("/finalizar-conversa", async (req, res) => {
       });
     }
 
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    conversa.status = "finalizada";
+    conversa.finishedAt = new Date().toISOString();
+    conversa.finishedBy = attendant || conversa.attendant || "Sistema";
+    conversa.unreadCount = 0;
+
+    addConversationHistory(conversa, "finalizou", conversa.finishedBy, {
+      status: "finalizada"
+    });
+
+    conversa.messages.forEach(msg => {
+      msg.read = true;
+    });
+
+    await saveConversations();
+
+    io.emit("conversasAtualizadas", getConversationList());
+
+    return res.json({
+      sucesso: true,
+      jid,
+      status: conversa.status,
+      finishedBy: conversa.finishedBy,
+      finishedAt: conversa.finishedAt
+    });
+
+  } catch (error) {
+    console.error("Erro ao finalizar conversa:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/transferir-conversa", async (req, res) => {
   try {
     const { jid, fromAttendant, toAttendant } = req.body;
@@ -908,49 +951,6 @@ app.post("/transferir-conversa", async (req, res) => {
 
   } catch (error) {
     console.error("Erro ao transferir conversa:", error);
-    return res.status(500).json({
-      sucesso: false,
-      erro: error.message
-    });
-  }
-});
-    
-    const conversa = getConversationList().find(c => c.jid === jid);
-
-    if (!conversa) {
-      return res.status(404).json({
-        sucesso: false,
-        erro: "Conversa não encontrada"
-      });
-    }
-
-    conversa.status = "finalizada";
-    conversa.finishedAt = new Date().toISOString();
-    conversa.finishedBy = attendant || conversa.attendant || "Sistema";
-    conversa.unreadCount = 0;
-
-addConversationHistory(conversa, "finalizou", conversa.finishedBy, {
-  status: "finalizada"
-});
-
-    conversa.messages.forEach(msg => {
-      msg.read = true;
-    });
-
-    await saveConversations();
-
-    io.emit("conversasAtualizadas", getConversationList());
-
-    return res.json({
-      sucesso: true,
-      jid,
-      status: conversa.status,
-      finishedBy: conversa.finishedBy,
-      finishedAt: conversa.finishedAt
-    });
-
-  } catch (error) {
-    console.error("Erro ao finalizar conversa:", error);
     return res.status(500).json({
       sucesso: false,
       erro: error.message
