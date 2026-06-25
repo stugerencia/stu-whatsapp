@@ -25,6 +25,7 @@ const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
 const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
 const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
+const TAGS_FILE = path.join(DATA_DIR, "tags.json");
 
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
@@ -35,6 +36,9 @@ let lastQr = null;
 
 let clientConversations = [];
 let groupConversations = [];
+
+let tags = [];
+
 const users = [
   {
     id: 1,
@@ -226,6 +230,38 @@ async function saveConversations() {
       saveConversationsPending = false;
       await saveConversations();
     }
+  }
+}
+
+async function loadTags() {
+  try {
+    await ensureDirs();
+
+    const raw = await fs.readFile(TAGS_FILE, "utf-8");
+
+    tags = JSON.parse(raw);
+
+    console.log("Etiquetas carregadas:", tags.length);
+
+  } catch {
+    tags = [];
+  }
+}
+
+
+async function saveTags() {
+  try {
+    await ensureDirs();
+
+    await fs.writeFile(
+      TAGS_FILE,
+      JSON.stringify(tags, null, 2)
+    );
+
+    console.log("Etiquetas salvas");
+
+  } catch (error) {
+    console.error("Erro ao salvar etiquetas:", error);
   }
 }
 
@@ -1070,6 +1106,239 @@ app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
 
+app.get("/etiquetas", (req, res) => {
+  res.json(tags);
+});
+
+app.post("/criar-etiqueta", async (req, res) => {
+  try {
+    const { name, color } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o nome da etiqueta"
+      });
+    }
+
+    const exists = tags.find(t =>
+      t.name.toLowerCase() === name.toLowerCase()
+    );
+
+    if (exists) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Já existe uma etiqueta com esse nome"
+      });
+    }
+
+    const tag = {
+      id: Date.now(),
+      name,
+      color: color || "#2563eb",
+      createdAt: new Date().toISOString()
+    };
+
+    tags.push(tag);
+    await saveTags();
+
+    return res.json({
+      sucesso: true,
+      tag
+    });
+
+  } catch (error) {
+    console.error("Erro ao criar etiqueta:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/editar-etiqueta", async (req, res) => {
+  try {
+    const { id, name, color } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o id da etiqueta"
+      });
+    }
+
+    const tag = tags.find(t => String(t.id) === String(id));
+
+    if (!tag) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Etiqueta não encontrada"
+      });
+    }
+
+    if (name) tag.name = name;
+    if (color) tag.color = color;
+    tag.updatedAt = new Date().toISOString();
+
+    await saveTags();
+
+    return res.json({
+      sucesso: true,
+      tag
+    });
+
+  } catch (error) {
+    console.error("Erro ao editar etiqueta:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/excluir-etiqueta", async (req, res) => {
+  try {
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o id da etiqueta"
+      });
+    }
+
+    tags = tags.filter(t => String(t.id) !== String(id));
+
+    getConversationList().forEach(conversa => {
+      conversa.tagIds = (conversa.tagIds || []).filter(
+        tagId => String(tagId) !== String(id)
+      );
+    });
+
+    await saveTags();
+    await saveConversations();
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      id
+    });
+
+  } catch (error) {
+    console.error("Erro ao excluir etiqueta:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/adicionar-etiqueta", async (req, res) => {
+  try {
+    const { jid, tagId } = req.body;
+
+    if (!jid || !tagId) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid e tagId"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+    const tag = tags.find(t => String(t.id) === String(tagId));
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    if (!tag) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Etiqueta não encontrada"
+      });
+    }
+
+    if (!conversa.tagIds) conversa.tagIds = [];
+
+    if (!conversa.tagIds.some(id => String(id) === String(tagId))) {
+      conversa.tagIds.push(tag.id);
+    }
+
+    addConversationHistory(conversa, "adicionou_etiqueta", "Sistema", {
+      tagId: tag.id,
+      tagName: tag.name
+    });
+
+    await saveConversations();
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid,
+      tagIds: conversa.tagIds
+    });
+
+  } catch (error) {
+    console.error("Erro ao adicionar etiqueta:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/remover-etiqueta", async (req, res) => {
+  try {
+    const { jid, tagId } = req.body;
+
+    if (!jid || !tagId) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid e tagId"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    conversa.tagIds = (conversa.tagIds || []).filter(
+      id => String(id) !== String(tagId)
+    );
+
+    addConversationHistory(conversa, "removeu_etiqueta", "Sistema", {
+      tagId
+    });
+
+    await saveConversations();
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid,
+      tagIds: conversa.tagIds
+    });
+
+  } catch (error) {
+    console.error("Erro ao remover etiqueta:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/waha-webhook", async (req, res) => {
   try {
         const payload = req.body?.payload || {};
@@ -1293,6 +1562,7 @@ server.listen(PORT, async () => {
   await ensureDirs();
   await loadConversations();
   await loadLidMap();
+  await loadTags();
 
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
