@@ -363,6 +363,18 @@ async function ensureDefaultUsers() {
   console.log("Usuários padrão criados com senha inicial 123456");
 }
 
+function publicUser(user) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    active: user.active,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt
+  };
+}
+
 async function loadLidMap() {
   try {
     await ensureDirs();
@@ -942,7 +954,7 @@ app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
 app.get("/usuarios", (req, res) => {
-  res.json(users);
+  res.json(users.map(publicUser));
 });
 app.get("/conversas-usuario", (req, res) => {
   const userName = req.query.userName;
