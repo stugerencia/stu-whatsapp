@@ -39,6 +39,8 @@ let groupConversations = [];
 let lidToPhone = {};
 let phoneToLid = {};
 let groupNameCache = {};
+let saveConversationsRunning = false;
+let saveConversationsPending = false;
 
 function getConversationList() {
   return [...clientConversations, ...groupConversations].sort((a, b) => {
@@ -110,6 +112,13 @@ async function loadConversations() {
 }
 
 async function saveConversations() {
+  if (saveConversationsRunning) {
+    saveConversationsPending = true;
+    return;
+  }
+
+  saveConversationsRunning = true;
+
   try {
     await ensureDirs();
 
@@ -129,6 +138,13 @@ async function saveConversations() {
 
   } catch (error) {
     console.error("Erro ao salvar conversas:", error);
+  } finally {
+    saveConversationsRunning = false;
+
+    if (saveConversationsPending) {
+      saveConversationsPending = false;
+      await saveConversations();
+    }
   }
 }
 
