@@ -26,6 +26,7 @@ const MEDIA_DIR = process.env.MEDIA_DIR || "/app/data/media";
 const LID_MAP_FILE = path.join(DATA_DIR, "lid_phone_map.json");
 const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
 const TAGS_FILE = path.join(DATA_DIR, "tags.json");
+const QUICK_MESSAGES_FILE = path.join(DATA_DIR, "quick_messages.json");
 
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
@@ -38,6 +39,7 @@ let clientConversations = [];
 let groupConversations = [];
 
 let tags = [];
+let quickMessages = [];
 
 const users = [
   {
@@ -262,6 +264,38 @@ async function saveTags() {
 
   } catch (error) {
     console.error("Erro ao salvar etiquetas:", error);
+  }
+}
+
+async function loadQuickMessages() {
+  try {
+    await ensureDirs();
+
+    const raw = await fs.readFile(QUICK_MESSAGES_FILE, "utf-8");
+
+    quickMessages = JSON.parse(raw);
+
+    console.log("Mensagens rápidas carregadas:", quickMessages.length);
+
+  } catch {
+    quickMessages = [];
+  }
+}
+
+
+async function saveQuickMessages() {
+  try {
+    await ensureDirs();
+
+    await fs.writeFile(
+      QUICK_MESSAGES_FILE,
+      JSON.stringify(quickMessages, null, 2)
+    );
+
+    console.log("Mensagens rápidas salvas");
+
+  } catch (error) {
+    console.error("Erro ao salvar mensagens rápidas:", error);
   }
 }
 
@@ -1106,6 +1140,129 @@ app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
 
+app.get("/mensagens-rapidas", (req, res) => {
+  res.json(quickMessages);
+});
+
+app.post("/criar-mensagem-rapida", async (req, res) => {
+  try {
+    const { title, shortcut, text } = req.body;
+
+    if (!title || !text) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe título e texto da mensagem rápida"
+      });
+    }
+
+    const exists = quickMessages.find(m =>
+      m.title.toLowerCase() === title.toLowerCase() ||
+      (shortcut && m.shortcut?.toLowerCase() === shortcut.toLowerCase())
+    );
+
+    if (exists) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Já existe uma mensagem rápida com esse título ou atalho"
+      });
+    }
+
+    const quickMessage = {
+      id: Date.now(),
+      title,
+      shortcut: shortcut || "",
+      text,
+      createdAt: new Date().toISOString()
+    };
+
+    quickMessages.push(quickMessage);
+    await saveQuickMessages();
+
+    return res.json({
+      sucesso: true,
+      quickMessage
+    });
+
+  } catch (error) {
+    console.error("Erro ao criar mensagem rápida:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/editar-mensagem-rapida", async (req, res) => {
+  try {
+    const { id, title, shortcut, text } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o id da mensagem rápida"
+      });
+    }
+
+    const quickMessage = quickMessages.find(m => String(m.id) === String(id));
+
+    if (!quickMessage) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Mensagem rápida não encontrada"
+      });
+    }
+
+    if (title) quickMessage.title = title;
+    if (shortcut !== undefined) quickMessage.shortcut = shortcut;
+    if (text) quickMessage.text = text;
+
+    quickMessage.updatedAt = new Date().toISOString();
+
+    await saveQuickMessages();
+
+    return res.json({
+      sucesso: true,
+      quickMessage
+    });
+
+  } catch (error) {
+    console.error("Erro ao editar mensagem rápida:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/excluir-mensagem-rapida", async (req, res) => {
+  try {
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o id da mensagem rápida"
+      });
+    }
+
+    quickMessages = quickMessages.filter(m => String(m.id) !== String(id));
+
+    await saveQuickMessages();
+
+    return res.json({
+      sucesso: true,
+      id
+    });
+
+  } catch (error) {
+    console.error("Erro ao excluir mensagem rápida:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.get("/etiquetas", (req, res) => {
   res.json(tags);
 });
@@ -1563,6 +1720,7 @@ server.listen(PORT, async () => {
   await loadConversations();
   await loadLidMap();
   await loadTags();
+  await loadQuickMessages();
 
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
