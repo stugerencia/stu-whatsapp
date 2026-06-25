@@ -971,9 +971,68 @@ app.get("/grupos", (req, res) => {
 app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
+
 app.get("/usuarios", (req, res) => {
   res.json(users.map(publicUser));
 });
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe e-mail e senha"
+      });
+    }
+
+    const user = users.find(u =>
+      u.email.toLowerCase() === String(email).toLowerCase()
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        sucesso: false,
+        erro: "Usuário ou senha inválidos"
+      });
+    }
+
+    if (user.active === false) {
+      return res.status(403).json({
+        sucesso: false,
+        erro: "Usuário inativo"
+      });
+    }
+
+    const senhaConfere = await bcrypt.compare(password, user.passwordHash);
+
+    if (!senhaConfere) {
+      return res.status(401).json({
+        sucesso: false,
+        erro: "Usuário ou senha inválidos"
+      });
+    }
+
+    user.lastLoginAt = new Date().toISOString();
+    await saveUsers();
+
+    const token = generateToken(user);
+
+    return res.json({
+      sucesso: true,
+      token,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Erro no login:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.get("/conversas-usuario", (req, res) => {
   const userName = req.query.userName;
   const role = req.query.role || "atendente";
