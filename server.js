@@ -1024,6 +1024,203 @@ app.post("/login", async (req, res) => {
       });
     }
 
+    app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, email, role, password } = req.body;
+
+    if (!name || !email || !role || !password) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe nome, e-mail, perfil e senha"
+      });
+    }
+
+    const exists = users.find(u =>
+      u.email.toLowerCase() === String(email).toLowerCase()
+    );
+
+    if (exists) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Já existe usuário com esse e-mail"
+      });
+    }
+
+    const user = {
+      id: Date.now(),
+      name,
+      email,
+      role,
+      active: true,
+      passwordHash: await bcrypt.hash(password, 10),
+      createdAt: new Date().toISOString(),
+      createdBy: req.user.name
+    };
+
+    users.push(user);
+    await saveUsers();
+
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Erro ao criar usuário:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/editar-usuario", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id, name, email, role } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o id do usuário"
+      });
+    }
+
+    const user = users.find(u => String(u.id) === String(id));
+
+    if (!user) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Usuário não encontrado"
+      });
+    }
+
+    if (name) user.name = name;
+    if (email) user.email = email;
+    if (role) user.role = role;
+
+    user.updatedAt = new Date().toISOString();
+    user.updatedBy = req.user.name;
+
+    await saveUsers();
+
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Erro ao editar usuário:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/alterar-senha", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id, password } = req.body;
+
+    if (!id || !password) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe id e nova senha"
+      });
+    }
+
+    const user = users.find(u => String(u.id) === String(id));
+
+    if (!user) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Usuário não encontrado"
+      });
+    }
+
+    user.passwordHash = await bcrypt.hash(password, 10);
+    user.passwordChangedAt = new Date().toISOString();
+    user.passwordChangedBy = req.user.name;
+
+    await saveUsers();
+
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Erro ao alterar senha:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/desativar-usuario", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.body;
+
+    const user = users.find(u => String(u.id) === String(id));
+
+    if (!user) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Usuário não encontrado"
+      });
+    }
+
+    user.active = false;
+    user.updatedAt = new Date().toISOString();
+    user.updatedBy = req.user.name;
+
+    await saveUsers();
+
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.post("/ativar-usuario", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.body;
+
+    const user = users.find(u => String(u.id) === String(id));
+
+    if (!user) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Usuário não encontrado"
+      });
+    }
+
+    user.active = true;
+    user.updatedAt = new Date().toISOString();
+    user.updatedBy = req.user.name;
+
+    await saveUsers();
+
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
     const user = users.find(u =>
       u.email.toLowerCase() === String(email).toLowerCase()
     );
