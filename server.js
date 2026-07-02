@@ -2067,31 +2067,113 @@ const chatId = toWahaChatId(jid);
   }
 });
 
-app.post("/enviar-midia", async (req, res) => {
+app.post("/enviar-midia", authenticateToken, async (req, res) => {
   try {
     const { jid, mediaType, base64, mimeType, fileName, caption } = req.body;
 
     if (!jid || !mediaType || !base64) {
-      return res.status(400).json({ erro: "Informe jid, mediaType e base64" });
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid, mediaType e base64"
+      });
     }
+
+    const conversa = findConversationByJid(jid);
+
+    if (!canSendInConversation(conversa)) {
+      return res.status(403).json({
+        sucesso: false,
+        erro: "Assuma a conversa antes de enviar anexos."
+      });
+    }
+
+    const chatId = toWahaChatId(jid);
+    const finalMimeType = mimeType || "application/octet-stream";
+    const finalFileName =
+      fileName || `${Date.now()}.${getExtensionFromMime(finalMimeType)}`;
 
     const buffer = Buffer.from(base64, "base64");
 
     const savedMedia = await saveBufferToMedia(
       buffer,
-      fileName || `${Date.now()}.${getExtensionFromMime(mimeType || "")}`,
-      mimeType || "application/octet-stream"
+      finalFileName,
+      finalMimeType
     );
 
-    res.status(501).json({
-      sucesso: false,
-      erro: "Envio de mídia pelo WAHA ainda será ligado no próximo passo.",
-      mediaLocalSalva: savedMedia,
-      dica: "Recebimento de mídia já está preparado; envio será ajustado após confirmar endpoint correto do WAHA."
+    let endpoint = "/api/sendFile";
+
+    if (mediaType === "image" || finalMimeType.startsWith("image/")) {
+      endpoint = "/api/sendImage";
+    } else if (mediaType === "video" || finalMimeType.startsWith("video/")) {
+      endpoint = "/api/sendVideo";
+    }
+
+    const payload = {
+      session: WAHA_SESSION,
+      chatId,
+      file: {
+        mimetype: finalMimeType,
+        filename: finalFileName,
+        data: base64
+      },
+      caption: caption || ""
+    };
+
+    let response = await fetch(`${WAHA_URL}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
+
+    let data = await response.json().catch(() => ({}));
+
+    if (!response.ok && endpoint !== "/api/sendFile") {
+      response = await fetch(`${WAHA_URL}/api/sendFile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      data = await response.json().catch(() => ({}));
+    }
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao enviar mídia pelo WAHA",
+        detalhe: data
+      });
+    }
+
+    await saveMessage({
+      jid: toInternalPhoneJid(jid),
+      sender: "sistema",
+      senderName: "STU Atendimento",
+      text: caption || "",
+      direction: "sent",
+      waMessageId: data?.id || data?.key?.id || data?.messageId || null,
+      mediaType,
+      mediaUrl: savedMedia.mediaUrl,
+      mediaName: savedMedia.mediaName,
+      mimeType: savedMedia.mimeType,
+      fileSize: savedMedia.fileSize
+    });
+
+    return res.json({
+      sucesso: true,
+      jid: toInternalPhoneJid(jid),
+      mediaType,
+      media: savedMedia,
+      waha: data
+    });
+
   } catch (error) {
-    console.error("Erro ao preparar mídia:", error);
-    res.status(500).json({ erro: "Erro ao preparar mídia", detalhe: error.message });
+    console.error("Erro ao enviar mídia:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao enviar mídia",
+      detalhe: error.message
+    });
   }
 });
 
