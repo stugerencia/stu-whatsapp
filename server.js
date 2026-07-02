@@ -81,6 +81,7 @@ function findConversationByJid(jid = "") {
 
 function canSendInConversation(conversa) {
   if (!conversa) return false;
+  if (isGroupJid(conversa.jid)) return true;
   if (conversa.conversationType === "grupo_operacional") return true;
   if (conversa.type === "grupo_operacional") return true;
   return conversa.status === "em_atendimento";
@@ -2002,7 +2003,18 @@ if (!canSendInConversation(conversa)) {
     String(mensagem || "").includes("Bem-vindo") ||
     String(mensagem || "").includes("Olá");
 
-  if (!isSystemMessage) {
+  if (conversa.status === "finalizada") {
+    conversa.status = "em_atendimento";
+    conversa.attendant = req.user?.name || conversa.attendant || "Sistema";
+    conversa.openedAt = new Date().toISOString();
+    conversa.openedBy = conversa.attendant;
+
+    addConversationHistory(conversa, "reabriu", conversa.attendant, {
+      motivo: "Reabertura manual com envio de mensagem."
+    });
+
+    await saveConversations();
+  } else if (!isSystemMessage) {
     return res.status(403).json({
       sucesso: false,
       erro: "Assuma a conversa antes de enviar mensagens."
