@@ -1996,10 +1996,18 @@ app.post("/enviar", authenticateToken, async (req, res) => {
 const conversa = findConversationByJid(jid);
 
 if (!canSendInConversation(conversa)) {
-  return res.status(403).json({
-    sucesso: false,
-    erro: "Assuma a conversa antes de enviar mensagens."
-  });
+  const isSystemMessage =
+    String(mensagem || "").includes("seu atendimento foi finalizado") ||
+    String(mensagem || "").includes("Obrigado pelo contato") ||
+    String(mensagem || "").includes("Bem-vindo") ||
+    String(mensagem || "").includes("Olá");
+
+  if (!isSystemMessage) {
+    return res.status(403).json({
+      sucesso: false,
+      erro: "Assuma a conversa antes de enviar mensagens."
+    });
+  }
 }
 
 const chatId = toWahaChatId(jid);
