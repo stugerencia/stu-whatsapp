@@ -1017,6 +1017,25 @@ app.use(
   })
 );
 
+app.get("/download/:fileName", async (req, res) => {
+  try {
+    const fileName = req.params.fileName;
+
+    if (!fileName || fileName.includes("..") || fileName.includes("/") || fileName.includes("\\")) {
+      return res.status(400).send("Arquivo inválido");
+    }
+
+    const filePath = path.join(MEDIA_DIR, fileName);
+
+    await fs.access(filePath);
+
+    return res.download(filePath, fileName);
+  } catch (error) {
+    console.error("Erro ao baixar arquivo:", error);
+    return res.status(404).send("Arquivo não encontrado");
+  }
+});
+
 app.get("/status", (req, res) => {
   res.json({
     status: connectionStatus,
