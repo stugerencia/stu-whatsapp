@@ -2003,18 +2003,26 @@ if (!canSendInConversation(conversa)) {
     String(mensagem || "").includes("Bem-vindo") ||
     String(mensagem || "").includes("Olá");
 
-  if (conversa.status === "finalizada") {
-    conversa.status = "em_atendimento";
-    conversa.attendant = req.user?.name || conversa.attendant || "Sistema";
-    conversa.openedAt = new Date().toISOString();
-    conversa.openedBy = conversa.attendant;
+  const isFinalizationMessage =
+  String(mensagem || "").includes("seu atendimento foi finalizado") ||
+  String(mensagem || "").includes("Obrigado pelo contato");
 
-    addConversationHistory(conversa, "reabriu", conversa.attendant, {
-      motivo: "Reabertura manual com envio de mensagem."
-    });
+const isReopenMessage =
+  String(mensagem || "").includes("Bem-vindo") ||
+  String(mensagem || "").includes("Olá");
 
-    await saveConversations();
-  } else if (!isSystemMessage) {
+if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessage) {
+  conversa.status = "em_atendimento";
+  conversa.attendant = req.user?.name || conversa.attendant || "Sistema";
+  conversa.openedAt = new Date().toISOString();
+  conversa.openedBy = conversa.attendant;
+
+  addConversationHistory(conversa, "reabriu", conversa.attendant, {
+    motivo: "Reabertura manual com envio de mensagem."
+  });
+
+  await saveConversations();
+} else if (!isSystemMessage) {
     return res.status(403).json({
       sucesso: false,
       erro: "Assuma a conversa antes de enviar mensagens."
