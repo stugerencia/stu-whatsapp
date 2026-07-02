@@ -976,7 +976,7 @@ await saveMessage({
     displayName,
     text,
     direction: "received",
-    waMessageId: payload._data?.key?.id || payload.id,
+    waMessageId: payload.id || payload._data?.key?.id,
     mediaType,
     mediaUrl: mediaInfo.mediaUrl,
     mediaName: mediaInfo.mediaName,
@@ -2059,7 +2059,12 @@ const chatId = toWahaChatId(jid);
   chatId,
   text: mensagem,
   reply_to: quotedMessage?.waMessageId
-    ? `false_${chatId}_${quotedMessage.waMessageId}`
+    ? (
+        String(quotedMessage.waMessageId).startsWith("true_") ||
+        String(quotedMessage.waMessageId).startsWith("false_")
+          ? quotedMessage.waMessageId
+          : `${quotedMessage.sender === "sistema" ? "true" : "false"}_${chatId}_${quotedMessage.waMessageId}`
+      )
     : undefined
 })
     });
