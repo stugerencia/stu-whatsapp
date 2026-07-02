@@ -2007,7 +2007,7 @@ app.post("/mapear-telefone", async (req, res) => {
 
 app.post("/enviar", authenticateToken, async (req, res) => {
   try {
-    const { jid, mensagem } = req.body;
+    const { jid, mensagem, quotedMessage } = req.body;
 
     if (!jid || !mensagem) {
   return res.status(400).json({ erro: "Informe jid e mensagem" });
@@ -2055,10 +2055,11 @@ const chatId = toWahaChatId(jid);
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        session: WAHA_SESSION,
-        chatId,
-        text: mensagem
-      })
+      session: WAHA_SESSION,
+      chatId,
+     text: mensagem,
+     reply_to: quotedMessage?.waMessageId || undefined
+})
     });
 
     const data = await response.json().catch(() => ({}));
