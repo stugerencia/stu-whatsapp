@@ -2051,6 +2051,21 @@ if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessag
 
 const chatId = toWahaChatId(jid);
 
+console.log("ENVIANDO PARA WAHA:", {
+  session: WAHA_SESSION,
+  chatId,
+  mensagem,
+  quotedMessage,
+  reply_to: quotedMessage?.waMessageId
+    ? (
+        String(quotedMessage.waMessageId).startsWith("true_") ||
+        String(quotedMessage.waMessageId).startsWith("false_")
+          ? quotedMessage.waMessageId
+          : `${quotedMessage.sender === "sistema" ? "true" : "false"}_${chatId}_${quotedMessage.waMessageId}`
+      )
+    : undefined
+});    
+    
     const response = await fetch(`${WAHA_URL}/api/sendText`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2070,6 +2085,11 @@ const chatId = toWahaChatId(jid);
     });
 
     const data = await response.json().catch(() => ({}));
+  console.log("RESPOSTA WAHA SENDTEXT:", {
+  ok: response.ok,
+  status: response.status,
+  data
+});
 
     if (!response.ok) {
       return res.status(500).json({
