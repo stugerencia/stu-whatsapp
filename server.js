@@ -2057,13 +2057,13 @@ console.log("ENVIANDO PARA WAHA:", {
   mensagem,
   quotedMessage,
   reply_to: quotedMessage?.waMessageId
-    ? (
-        String(quotedMessage.waMessageId).startsWith("true_") ||
-        String(quotedMessage.waMessageId).startsWith("false_")
-          ? quotedMessage.waMessageId
-          : `${quotedMessage.sender === "sistema" ? "true" : "false"}_${chatId}_${quotedMessage.waMessageId}`
-      )
-    : undefined
+  ? (
+      String(quotedMessage.waMessageId).startsWith("true_") ||
+      String(quotedMessage.waMessageId).startsWith("false_")
+        ? `${quotedMessage.sender === "sistema" ? "true" : "false"}_${chatId}_${String(quotedMessage.waMessageId).split("_").pop()}`
+        : `${quotedMessage.sender === "sistema" ? "true" : "false"}_${chatId}_${quotedMessage.waMessageId}`
+    )
+  : undefined
 });    
     
     const response = await fetch(`${WAHA_URL}/api/sendText`, {
