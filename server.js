@@ -74,6 +74,18 @@ function getConversationList() {
   });
 }
 
+function findConversationByJid(jid = "") {
+  const internalJid = toInternalPhoneJid(jid);
+  return getConversationList().find(c => c.jid === internalJid || c.jid === jid);
+}
+
+function canSendInConversation(conversa) {
+  if (!conversa) return false;
+  if (conversa.conversationType === "grupo_operacional") return true;
+  if (conversa.type === "grupo_operacional") return true;
+  return conversa.status === "em_atendimento";
+}
+
 function getConversationListByUser(userName, role = "atendente") {
   const conversas = getConversationList();
 
@@ -939,11 +951,24 @@ async function processarMensagemWaha(body) {
     fileSize: null
   };
 
-  if (mediaType !== "none") {
-    mediaInfo = await downloadWahaMedia(payload);
-  }
+ if (mediaType !== "none") {
+  mediaInfo = await downloadWahaMedia(payload);
+}
 
-  await saveMessage({
+const conversaRecebida = await getOrCreateConversation(jid, isGroup, displayName);
+
+if (!isGroup && conversaRecebida.status === "finalizada") {
+  conversaRecebida.status = "nova";
+  conversaRecebida.attendant = null;
+  conversaRecebida.finishedAt = null;
+  conversaRecebida.finishedBy = null;
+
+  addConversationHistory(conversaRecebida, "reabriu", "Sistema", {
+    motivo: "Nova mensagem recebida."
+  });
+}
+
+await saveMessage({
     jid,
     sender,
     senderName,
@@ -1965,10 +1990,19 @@ app.post("/enviar", authenticateToken, async (req, res) => {
     const { jid, mensagem } = req.body;
 
     if (!jid || !mensagem) {
-      return res.status(400).json({ erro: "Informe jid e mensagem" });
-    }
+  return res.status(400).json({ erro: "Informe jid e mensagem" });
+}
 
-    const chatId = toWahaChatId(jid);
+const conversa = findConversationByJid(jid);
+
+if (!canSendInConversation(conversa)) {
+  return res.status(403).json({
+    sucesso: false,
+    erro: "Assuma a conversa antes de enviar mensagens."
+  });
+}
+
+const chatId = toWahaChatId(jid);
 
     const response = await fetch(`${WAHA_URL}/api/sendText`, {
       method: "POST",
