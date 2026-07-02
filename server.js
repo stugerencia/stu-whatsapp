@@ -2055,10 +2055,12 @@ const chatId = toWahaChatId(jid);
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-      session: WAHA_SESSION,
-      chatId,
-     text: mensagem,
-     reply_to: quotedMessage?.waMessageId || undefined
+  session: WAHA_SESSION,
+  chatId,
+  text: mensagem,
+  reply_to: quotedMessage?.waMessageId
+    ? `false_${chatId}_${quotedMessage.waMessageId}`
+    : undefined
 })
     });
 
