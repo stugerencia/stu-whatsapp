@@ -49,6 +49,39 @@ const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
 const WAHA_SESSION = process.env.WAHA_SESSION || "default";
 
+async function startWahaSessionWithStore() {
+  try {
+    console.log("🔄 Iniciando sessão WAHA com NOWEB store...");
+
+    const response = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}/start`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        config: {
+          noweb: {
+            store: {
+              enabled: true,
+              fullSync: true
+            }
+          }
+        }
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    console.log("✅ WAHA STORE START:", {
+      ok: response.ok,
+      status: response.status,
+      data
+    });
+  } catch (error) {
+    console.error("❌ Erro ao iniciar WAHA store:", error.message);
+  }
+}
+
 let connectionStatus = "WAHA MODE ATIVO";
 let lastQr = null;
 
@@ -1070,18 +1103,7 @@ app.get("/usuarios", authenticateToken, (req, res) => {
   res.json(users.map(publicUser));
 });
 
-app.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        sucesso: false,
-        erro: "Informe e-mail e senha"
-      });
-    }
-
-    app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => {
+app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, email, role, password } = req.body;
 
@@ -1278,6 +1300,17 @@ app.post("/ativar-usuario", authenticateToken, requireAdmin, async (req, res) =>
   }
 });
 
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe e-mail e senha"
+      });
+    }
+    
     const user = users.find(u =>
       u.email.toLowerCase() === String(email).toLowerCase()
     );
@@ -2330,6 +2363,7 @@ server.listen(PORT, async () => {
   await loadQuickMessages();
   await loadUsers();
   await ensureDefaultUsers();
+  await startWahaSessionWithStore();
 
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
