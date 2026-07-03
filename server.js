@@ -2052,7 +2052,9 @@ if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessag
   }
 }
 
-const chatId = toWahaChatId(jid);
+const chatId = quotedMessage?.waMessageId?.includes("_")
+  ? quotedMessage.waMessageId.split("_")[1]
+  : toWahaChatId(jid);
 
 console.log("ENVIANDO PARA WAHA:", {
   session: WAHA_SESSION,
