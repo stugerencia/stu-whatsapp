@@ -2108,7 +2108,8 @@ reply_to: quotedMessage?.waMessageId || undefined
   text: mensagem,
   linkPreview: false,
   linkPreviewHighQuality: false
-})
+  })
+});
 
     const data = await response.json().catch(() => ({}));
   console.log("RESPOSTA WAHA SENDTEXT:", {
