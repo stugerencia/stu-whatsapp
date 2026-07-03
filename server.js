@@ -2103,9 +2103,12 @@ reply_to: quotedMessage?.waMessageId || undefined
       body: JSON.stringify({
   session: WAHA_SESSION,
   chatId,
+  id: null,
+  reply_to: quotedMessage?.waMessageId || null,
   text: mensagem,
- reply_to: quotedMessage?.waMessageId || undefined})
-    });
+  linkPreview: false,
+  linkPreviewHighQuality: false
+})
 
     const data = await response.json().catch(() => ({}));
   console.log("RESPOSTA WAHA SENDTEXT:", {
