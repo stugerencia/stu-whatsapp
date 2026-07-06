@@ -637,7 +637,24 @@ async function downloadWahaMedia(payload) {
 }
 
 async function getProfilePicture(jid) {
-  return null;
+  try {
+    if (!jid) return null;
+
+    const chatId = toWahaChatId(jid);
+
+    const response = await fetch(
+      `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`
+    );
+
+    if (!response.ok) return null;
+
+    const data = await response.json().catch(() => ({}));
+
+    return data?.url || data?.profilePictureURL || data?.picture || null;
+  } catch (error) {
+    console.log("Erro ao buscar foto do contato:", error.message);
+    return null;
+  }
 }
 
 async function getGroupName(jid) {
