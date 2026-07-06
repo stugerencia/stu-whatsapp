@@ -640,6 +640,56 @@ async function getProfilePicture(jid) {
   return null;
 }
 
+async function buscarFotoContatoWaha(conversa) {
+  try {
+    if (!conversa) return null;
+
+    const candidatos = [];
+
+    if (conversa.jid) candidatos.push(conversa.jid);
+    if (conversa.whatsappId) candidatos.push(conversa.whatsappId);
+
+    if (conversa.realPhone) {
+      candidatos.push(`${normalizePhone(conversa.realPhone)}@c.us`);
+      candidatos.push(`${normalizePhone(conversa.realPhone)}@s.whatsapp.net`);
+    }
+
+    if (conversa.telefone) {
+      candidatos.push(`${normalizePhone(conversa.telefone)}@c.us`);
+      candidatos.push(`${normalizePhone(conversa.telefone)}@s.whatsapp.net`);
+    }
+
+    if (conversa.clientPhone) {
+      candidatos.push(`${normalizePhone(conversa.clientPhone)}@c.us`);
+      candidatos.push(`${normalizePhone(conversa.clientPhone)}@s.whatsapp.net`);
+    }
+
+    if (conversa.lid) {
+      candidatos.push(`${conversa.lid}@lid`);
+    }
+
+    const unicos = [...new Set(candidatos.filter(Boolean))];
+
+    for (const chatId of unicos) {
+      const response = await fetch(
+        `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`
+      );
+
+      if (!response.ok) continue;
+
+      const data = await response.json().catch(() => ({}));
+      const url = data?.url || data?.profilePictureURL || data?.picture || null;
+
+      if (url) return url;
+    }
+
+    return null;
+  } catch (error) {
+    console.log("Erro ao buscar foto sob demanda:", error.message);
+    return null;
+  }
+}
+
 async function getGroupName(jid) {
   try {
     if (!jid || !jid.endsWith("@g.us")) return jid;
@@ -1097,6 +1147,63 @@ app.get("/grupos", (req, res) => {
 
 app.get("/conversas", (req, res) => {
   res.json(getConversationList());
+});
+
+app.post("/atualizar-foto-contato", authenticateToken, async (req, res) => {
+  try {
+    const { jid } = req.body;
+
+    if (!jid) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o jid da conversa"
+      });
+    }
+
+    const conversa = findConversationByJid(jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const foto = await buscarFotoContatoWaha(conversa);
+
+    if (!foto) {
+      return res.json({
+        sucesso: false,
+        jid,
+        foto: null,
+        mensagem: "Foto não encontrada no WAHA"
+      });
+    }
+
+    conversa.profilePictureUrl = foto;
+    conversa.avatarUrl = foto;
+    conversa.picture = foto;
+    conversa.photo = foto;
+    conversa.contactPhoto = foto;
+    conversa.updatedAt = new Date().toISOString();
+
+    await saveConversations();
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid,
+      foto
+    });
+
+  } catch (error) {
+    console.error("Erro em /atualizar-foto-contato:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
 });
 
 app.get("/usuarios", authenticateToken, (req, res) => {
