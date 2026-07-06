@@ -640,30 +640,6 @@ async function getProfilePicture(jid) {
   return null;
 }
 
-    const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
-
-    for (const candidate of uniqueCandidates) {
-      const response = await fetch(
-        `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(candidate)}/picture`
-      );
-
-      if (!response.ok) continue;
-
-      const data = await response.json().catch(() => ({}));
-      const pictureUrl = data?.url || data?.profilePictureURL || data?.picture || null;
-
-      if (pictureUrl) {
-        return pictureUrl;
-      }
-    }
-
-    return null;
-  } catch (error) {
-    console.log("Erro ao buscar foto do contato:", error.message);
-    return null;
-  }
-}
-
 async function getGroupName(jid) {
   try {
     if (!jid || !jid.endsWith("@g.us")) return jid;
