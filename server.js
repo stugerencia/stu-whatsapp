@@ -640,17 +640,36 @@ async function getProfilePicture(jid) {
   try {
     if (!jid) return null;
 
-    const chatId = toWahaChatId(jid);
+    const candidates = [];
 
-    const response = await fetch(
-      `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`
-    );
+    candidates.push(jid);
+    candidates.push(toWahaChatId(jid));
 
-    if (!response.ok) return null;
+    const phone = normalizePhone(cleanJid(jid));
+    const mappedLid = phoneToLid[phone];
 
-    const data = await response.json().catch(() => ({}));
+    if (mappedLid) {
+      candidates.push(`${mappedLid}@lid`);
+    }
 
-    return data?.url || data?.profilePictureURL || data?.picture || null;
+    const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
+
+    for (const candidate of uniqueCandidates) {
+      const response = await fetch(
+        `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(candidate)}/picture`
+      );
+
+      if (!response.ok) continue;
+
+      const data = await response.json().catch(() => ({}));
+      const pictureUrl = data?.url || data?.profilePictureURL || data?.picture || null;
+
+      if (pictureUrl) {
+        return pictureUrl;
+      }
+    }
+
+    return null;
   } catch (error) {
     console.log("Erro ao buscar foto do contato:", error.message);
     return null;
