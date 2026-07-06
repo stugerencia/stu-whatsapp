@@ -637,20 +637,8 @@ async function downloadWahaMedia(payload) {
 }
 
 async function getProfilePicture(jid) {
-  try {
-    if (!jid) return null;
-
-    const candidates = [];
-
-    candidates.push(jid);
-    candidates.push(toWahaChatId(jid));
-
-    const phone = normalizePhone(cleanJid(jid));
-    const mappedLid = phoneToLid[phone];
-
-    if (mappedLid) {
-      candidates.push(`${mappedLid}@lid`);
-    }
+  return null;
+}
 
     const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
 
