@@ -668,21 +668,63 @@ async function buscarFotoContatoWaha(conversa) {
       candidatos.push(`${conversa.lid}@lid`);
     }
 
+    const phone = normalizePhone(cleanJid(conversa.jid || conversa.clientPhone || ""));
+    if (phone) {
+      candidatos.push(`${phone}@c.us`);
+      candidatos.push(`${phone}@s.whatsapp.net`);
+
+      const mappedLid = phoneToLid[phone];
+      if (mappedLid) {
+        candidatos.push(`${mappedLid}@lid`);
+      }
+    }
+
     const unicos = [...new Set(candidatos.filter(Boolean))];
 
+    console.log("=== BUSCAR FOTO WAHA ===");
+    console.log("CONVERSA:", {
+      jid: conversa.jid,
+      whatsappId: conversa.whatsappId,
+      clientPhone: conversa.clientPhone,
+      realPhone: conversa.realPhone,
+      telefone: conversa.telefone,
+      lid: conversa.lid
+    });
+    console.log("CANDIDATOS:", unicos);
+
     for (const chatId of unicos) {
-      const response = await fetch(
-        `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`
-      );
+      const url = `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`;
+
+      const response = await fetch(url);
+
+      console.log("TESTANDO FOTO:", {
+        chatId,
+        status: response.status,
+        ok: response.ok
+      });
 
       if (!response.ok) continue;
 
       const data = await response.json().catch(() => ({}));
-      const url = data?.url || data?.profilePictureURL || data?.picture || null;
 
-      if (url) return url;
+      console.log("RESPOSTA FOTO:", {
+        chatId,
+        data
+      });
+
+      const pictureUrl = data?.url || data?.profilePictureURL || data?.picture || null;
+
+      if (pictureUrl) {
+        console.log("FOTO ENCONTRADA:", {
+          chatId,
+          pictureUrl
+        });
+
+        return pictureUrl;
+      }
     }
 
+    console.log("FOTO NÃO ENCONTRADA EM NENHUM CANDIDATO");
     return null;
   } catch (error) {
     console.log("Erro ao buscar foto sob demanda:", error.message);
