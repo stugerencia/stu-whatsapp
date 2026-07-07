@@ -719,19 +719,23 @@ for (const phone of basePhones) {
     console.log("CANDIDATOS:", unicos);
 
     for (const chatId of unicos) {
-      const url = `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture`;
+const isGroupCandidate = String(chatId).includes("@g.us");
+const url = isGroupCandidate
+  ? `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture?refresh=false`
+  : `${WAHA_URL}/api/contacts/profile-picture?contactId=${encodeURIComponent(chatId)}&refresh=false&session=${encodeURIComponent(WAHA_SESSION)}`;
 
-      const response = await fetch(url);
+const response = await fetch(url);
 
-      console.log("TESTANDO FOTO:", {
-        chatId,
-        status: response.status,
-        ok: response.ok
-      });
+console.log("TESTANDO FOTO:", {
+  chatId,
+  url,
+  status: response.status,
+  ok: response.ok
+});
 
-      if (!response.ok) continue;
+if (!response.ok) continue;
 
-      const data = await response.json().catch(() => ({}));
+const data = await response.json().catch(() => ({}));
 
       console.log("RESPOSTA FOTO:", {
         chatId,
