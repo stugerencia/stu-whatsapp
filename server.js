@@ -640,6 +640,16 @@ async function getProfilePicture(jid) {
   return null;
 }
 
+function gerarTelefoneSemNonoDigito(numero) {
+  const phone = normalizePhone(numero);
+
+  if (phone.startsWith("55") && phone.length === 13 && phone[4] === "9") {
+    return phone.slice(0, 4) + phone.slice(5);
+  }
+
+  return null;
+}
+
 async function buscarFotoContatoWaha(conversa) {
   try {
     if (!conversa) return null;
@@ -679,6 +689,22 @@ async function buscarFotoContatoWaha(conversa) {
       }
     }
 
+    const basePhones = [
+  conversa.clientPhone,
+  conversa.realPhone,
+  conversa.telefone,
+  cleanJid(conversa.jid || ""),
+  cleanJid(conversa.whatsappId || "")
+];
+
+for (const phone of basePhones) {
+  const semNove = gerarTelefoneSemNonoDigito(phone);
+
+  if (semNove) {
+    candidatos.push(`${semNove}@c.us`);
+    candidatos.push(`${semNove}@s.whatsapp.net`);
+  }
+}  
     const unicos = [...new Set(candidatos.filter(Boolean))];
 
     console.log("=== BUSCAR FOTO WAHA ===");
