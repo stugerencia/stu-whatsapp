@@ -636,87 +636,7 @@ async function downloadWahaMedia(payload) {
   }
 }
 
-async function getProfilePicture(jid) {
-  return null;
-}
-
-function gerarTelefoneSemNonoDigito(numero) {
-  const phone = normalizePhone(numero);
-
-  if (phone.startsWith("55") && phone.length === 13 && phone[4] === "9") {
-    return phone.slice(0, 4) + phone.slice(5);
-  }
-
-  return null;
-}
-
-async function buscarFotoContatoWaha(conversa) {
-  try {
-    if (!conversa) return null;
-
-    const candidatos = [];
-
-    if (conversa.jid) candidatos.push(conversa.jid);
-    if (conversa.whatsappId) candidatos.push(conversa.whatsappId);
-
-    if (conversa.realPhone) {
-      candidatos.push(`${normalizePhone(conversa.realPhone)}@c.us`);
-      candidatos.push(`${normalizePhone(conversa.realPhone)}@s.whatsapp.net`);
-    }
-
-    if (conversa.telefone) {
-      candidatos.push(`${normalizePhone(conversa.telefone)}@c.us`);
-      candidatos.push(`${normalizePhone(conversa.telefone)}@s.whatsapp.net`);
-    }
-
-    if (conversa.clientPhone) {
-      candidatos.push(`${normalizePhone(conversa.clientPhone)}@c.us`);
-      candidatos.push(`${normalizePhone(conversa.clientPhone)}@s.whatsapp.net`);
-    }
-
-    if (conversa.lid) {
-      candidatos.push(`${conversa.lid}@lid`);
-    }
-
-    const phone = normalizePhone(cleanJid(conversa.jid || conversa.clientPhone || ""));
-    if (phone) {
-      candidatos.push(`${phone}@c.us`);
-      candidatos.push(`${phone}@s.whatsapp.net`);
-
-      const mappedLid = phoneToLid[phone];
-      if (mappedLid) {
-        candidatos.push(`${mappedLid}@lid`);
-      }
-    }
-
-    const basePhones = [
-  conversa.clientPhone,
-  conversa.realPhone,
-  conversa.telefone,
-  cleanJid(conversa.jid || ""),
-  cleanJid(conversa.whatsappId || "")
-];
-
-for (const phone of basePhones) {
-  const semNove = gerarTelefoneSemNonoDigito(phone);
-
-  if (semNove) {
-    candidatos.push(`${semNove}@c.us`);
-    candidatos.push(`${semNove}@s.whatsapp.net`);
-  }
-}  
-    const unicos = [...new Set(candidatos.filter(Boolean))];
-
-    console.log("=== BUSCAR FOTO WAHA ===");
-    console.log("CONVERSA:", {
-      jid: conversa.jid,
-      whatsappId: conversa.whatsappId,
-      clientPhone: conversa.clientPhone,
-      realPhone: conversa.realPhone,
-      telefone: conversa.telefone,
-      lid: conversa.lid
-    });
-    console.log("CANDIDATOS:", unicos);
+console.log("CANDIDATOS:", unicos);
 
     for (const chatId of unicos) {
 const isGroupCandidate = String(chatId).includes("@g.us");
@@ -809,7 +729,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     let groupChat = groupConversations.find(c => c.jid === jid);
 
     const groupName = displayName && displayName !== jid ? displayName : await getGroupName(jid);
-    const profilePictureUrl = await getProfilePicture(jid);
+    
 
     if (!groupChat) {
       groupChat = {
@@ -823,8 +743,8 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
         realPhone: null,
         telefone: null,
         phoneUnavailableReason: "Grupo não possui telefone único",
-        profilePictureUrl,
-        avatarUrl: profilePictureUrl,
+        profilePictureUrl: null,
+        avatarUrl: null,
         conversationType: "grupo_operacional",
         type: "grupo_operacional",
         status: "monitorando",
@@ -838,8 +758,6 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     } else {
       groupChat.name = groupName || groupChat.name || jid;
       groupChat.clientName = groupChat.name;
-      groupChat.profilePictureUrl = profilePictureUrl || groupChat.profilePictureUrl || null;
-      groupChat.avatarUrl = groupChat.profilePictureUrl;
     }
 
     return groupChat;
@@ -851,7 +769,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
   const realPhone = findMappedPhone(jid);
   const clientPhone = realPhone || cleanJid(jid);
   const clientName = displayName || clientPhone;
-  const profilePictureUrl = await getProfilePicture(jid);
+  
 
   if (!clientChat) {
     clientChat = {
@@ -865,8 +783,8 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       realPhone,
       telefone: realPhone,
       phoneUnavailableReason: realPhone ? null : "Número real não disponível",
-      profilePictureUrl,
-      avatarUrl: profilePictureUrl,
+      profilePictureUrl: null,
+      avatarUrl: null,
       conversationType: "cliente",
       type: "cliente",
       status: "nova",
@@ -888,8 +806,6 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     clientChat.telefone = realPhone;
     clientChat.lid = lid;
     clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível";
-    clientChat.profilePictureUrl = profilePictureUrl || clientChat.profilePictureUrl || null;
-    clientChat.avatarUrl = clientChat.profilePictureUrl;
   }
 
   return clientChat;
@@ -1221,18 +1137,7 @@ app.get("/conversas", (req, res) => {
   res.json(getConversationList());
 });
 
-app.post("/atualizar-foto-contato", authenticateToken, async (req, res) => {
-  try {
-    const { jid } = req.body;
-
-    if (!jid) {
-      return res.status(400).json({
-        sucesso: false,
-        erro: "Informe o jid da conversa"
-      });
-    }
-
-    const conversa = findConversationByJid(jid);
+const conversa = findConversationByJid(jid);
 
     if (!conversa) {
       return res.status(404).json({
