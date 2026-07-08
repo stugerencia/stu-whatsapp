@@ -636,52 +636,6 @@ async function downloadWahaMedia(payload) {
   }
 }
 
-console.log("CANDIDATOS:", unicos);
-
-    for (const chatId of unicos) {
-const isGroupCandidate = String(chatId).includes("@g.us");
-const url = isGroupCandidate
-  ? `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/picture?refresh=false`
-  : `${WAHA_URL}/api/contacts/profile-picture?contactId=${encodeURIComponent(chatId)}&refresh=false&session=${encodeURIComponent(WAHA_SESSION)}`;
-
-const response = await fetch(url);
-
-console.log("TESTANDO FOTO:", {
-  chatId,
-  url,
-  status: response.status,
-  ok: response.ok
-});
-
-if (!response.ok) continue;
-
-const data = await response.json().catch(() => ({}));
-
-      console.log("RESPOSTA FOTO:", {
-        chatId,
-        data
-      });
-
-      const pictureUrl = data?.url || data?.profilePictureURL || data?.picture || null;
-
-      if (pictureUrl) {
-        console.log("FOTO ENCONTRADA:", {
-          chatId,
-          pictureUrl
-        });
-
-        return pictureUrl;
-      }
-    }
-
-    console.log("FOTO NÃO ENCONTRADA EM NENHUM CANDIDATO");
-    return null;
-  } catch (error) {
-    console.log("Erro ao buscar foto sob demanda:", error.message);
-    return null;
-  }
-}
-
 async function getGroupName(jid) {
   try {
     if (!jid || !jid.endsWith("@g.us")) return jid;
@@ -1135,52 +1089,6 @@ app.get("/grupos", (req, res) => {
 
 app.get("/conversas", (req, res) => {
   res.json(getConversationList());
-});
-
-const conversa = findConversationByJid(jid);
-
-    if (!conversa) {
-      return res.status(404).json({
-        sucesso: false,
-        erro: "Conversa não encontrada"
-      });
-    }
-
-    const foto = await buscarFotoContatoWaha(conversa);
-
-    if (!foto) {
-      return res.json({
-        sucesso: false,
-        jid,
-        foto: null,
-        mensagem: "Foto não encontrada no WAHA"
-      });
-    }
-
-    conversa.profilePictureUrl = foto;
-    conversa.avatarUrl = foto;
-    conversa.picture = foto;
-    conversa.photo = foto;
-    conversa.contactPhoto = foto;
-    conversa.updatedAt = new Date().toISOString();
-
-    await saveConversations();
-
-    emitConversationsToConnectedUsers();
-
-    return res.json({
-      sucesso: true,
-      jid,
-      foto
-    });
-
-  } catch (error) {
-    console.error("Erro em /atualizar-foto-contato:", error);
-    return res.status(500).json({
-      sucesso: false,
-      erro: error.message
-    });
-  }
 });
 
 app.get("/usuarios", authenticateToken, (req, res) => {
