@@ -2187,6 +2187,137 @@ reply_to: quotedMessage?.waMessageId || undefined
   }
 });
 
+app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
+  try {
+    const { message, destinations } = req.body;
+
+    if (!message) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe a mensagem para encaminhar"
+      });
+    }
+
+    if (!Array.isArray(destinations) || destinations.length === 0) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe ao menos um destino"
+      });
+    }
+
+    const texto = message.text || message.body || "";
+
+    if (!texto || String(texto).trim() === "") {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Nesta etapa, apenas mensagens de texto podem ser encaminhadas"
+      });
+    }
+
+    const resultados = [];
+
+    for (const destino of destinations) {
+      const jidDestino =
+        typeof destino === "string"
+          ? destino
+          : destino.jid || destino.whatsappId || destino.id;
+
+      if (!jidDestino) {
+        resultados.push({
+          destino,
+          sucesso: false,
+          erro: "Destino sem jid"
+        });
+        continue;
+      }
+
+      const conversaDestino = findConversationByJid(jidDestino);
+
+      if (!conversaDestino) {
+        resultados.push({
+          destino: jidDestino,
+          sucesso: false,
+          erro: "Conversa de destino não encontrada"
+        });
+        continue;
+      }
+
+      if (!canSendInConversation(conversaDestino)) {
+        resultados.push({
+          destino: jidDestino,
+          sucesso: false,
+          erro: "Conversa de destino precisa estar assumida antes do encaminhamento"
+        });
+        continue;
+      }
+
+      const chatId = toWahaChatId(conversaDestino.jid);
+
+      const response = await fetch(`${WAHA_URL}/api/sendText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session: WAHA_SESSION,
+          chatId,
+          id: null,
+          text: texto,
+          linkPreview: false,
+          linkPreviewHighQuality: false
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        resultados.push({
+          destino: conversaDestino.jid,
+          sucesso: false,
+          erro: "Erro ao encaminhar pelo WAHA",
+          detalhe: data
+        });
+        continue;
+      }
+
+      await saveMessage({
+        jid: conversaDestino.jid,
+        sender: "sistema",
+        senderName: "STU Atendimento",
+        text: texto,
+        direction: "sent",
+        waMessageId: data?.id || data?.key?.id || null
+      });
+
+      addConversationHistory(conversaDestino, "encaminhou_mensagem", req.user?.name || "Sistema", {
+        origemJid: message.jid || message.sourceJid || null,
+        mensagemOriginalId: message.id || message.waMessageId || null,
+        tipo: "texto"
+      });
+
+      resultados.push({
+        destino: conversaDestino.jid,
+        sucesso: true,
+        waha: data
+      });
+    }
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      total: destinations.length,
+      resultados
+    });
+
+  } catch (error) {
+    console.error("Erro em /encaminhar-mensagem:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/enviar-midia", authenticateToken, async (req, res) => {
   try {
     const { jid, mediaType, base64, mimeType, fileName, caption } = req.body;
