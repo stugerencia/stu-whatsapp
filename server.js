@@ -636,6 +636,63 @@ async function downloadWahaMedia(payload) {
   }
 }
 
+async function sincronizarFotosChatsOverview() {
+  try {
+    console.log("🔄 Sincronizando fotos pelo WAHA chats/overview...");
+
+    const response = await fetch(
+      `${WAHA_URL}/api/${WAHA_SESSION}/chats/overview?merge=true&limit=200&offset=0`
+    );
+
+    const chats = await response.json().catch(() => []);
+
+    if (!response.ok || !Array.isArray(chats)) {
+      console.log("⚠️ WAHA chats/overview não retornou lista válida");
+      return;
+    }
+
+    let atualizadas = 0;
+
+    for (const item of chats) {
+      const chatId = item.id;
+      const picture = item.picture || null;
+
+      if (!chatId || !picture) continue;
+
+      const internalJid = toInternalPhoneJid(chatId);
+
+      const conversa = getConversationList().find(c =>
+        c.jid === internalJid ||
+        c.jid === chatId ||
+        c.whatsappId === chatId ||
+        c.whatsappId === internalJid
+      );
+
+      if (!conversa) continue;
+
+      if (conversa.profilePictureUrl !== picture) {
+        conversa.profilePictureUrl = picture;
+        conversa.avatarUrl = picture;
+        conversa.picture = picture;
+        conversa.photo = picture;
+        conversa.contactPhoto = picture;
+        conversa.updatedAt = new Date().toISOString();
+        atualizadas++;
+      }
+    }
+
+    if (atualizadas > 0) {
+      await saveConversations();
+      emitConversationsToConnectedUsers();
+    }
+
+    console.log("✅ Fotos sincronizadas pelo chats/overview:", atualizadas);
+
+  } catch (error) {
+    console.error("❌ Erro ao sincronizar fotos pelo chats/overview:", error.message);
+  }
+}
+
 async function getGroupName(jid) {
   try {
     if (!jid || !jid.endsWith("@g.us")) return jid;
@@ -2352,6 +2409,7 @@ io.on("connection", (client) => {
 });
 
 server.listen(PORT, async () => {
+  
   await ensureDirs();
   await loadConversations();
   await loadLidMap();
@@ -2360,7 +2418,12 @@ server.listen(PORT, async () => {
   await loadUsers();
   await ensureDefaultUsers();
   await startWahaSessionWithStore();
+  await sincronizarFotosChatsOverview();
 
+setInterval(() => {
+  sincronizarFotosChatsOverview();
+}, 30 * 60 * 1000);
+  
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
   console.log("WAHA_URL:", WAHA_URL);
