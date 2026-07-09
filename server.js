@@ -2027,10 +2027,7 @@ app.post("/waha-webhook", async (req, res) => {
   try {
         const payload = req.body?.payload || {};
     const from = payload.from || payload._data?.key?.remoteJid;
-    if (req.body?.event === "message" && !payload.fromMe) {
-  console.log("PAYLOAD WAHA COMPLETO:", JSON.stringify(payload, null, 2));
-}
-
+   
     if (from === "status@broadcast" || payload._data?.broadcast === true) {
       console.log("ℹ️ Status do WhatsApp ignorado");
       return res.json({
