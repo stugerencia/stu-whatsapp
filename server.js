@@ -835,7 +835,8 @@ async function saveMessage({
   mediaName = null,
   mimeType = null,
   fileSize = null,
-  system = false
+  system = false,
+  forwarded = false
 }) {
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
@@ -861,6 +862,7 @@ async function saveMessage({
     mimeType,
     fileSize,
     system,
+    forwarded,
     deletedInWhatsApp: false,
     preservedInSystem: true
   };
@@ -2228,6 +2230,14 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
     }
 
     const texto = message.text || message.body || "";
+    const messageId = message.waMessageId || message.messageId || null;
+
+if (!messageId) {
+  return res.status(400).json({
+    sucesso: false,
+    erro: "A mensagem original não possui waMessageId para encaminhamento nativo"
+  });
+}
 
     if (!texto || String(texto).trim() === "") {
       return res.status(400).json({
@@ -2275,18 +2285,15 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
 
       const chatId = toWahaChatId(conversaDestino.jid);
 
-      const response = await fetch(`${WAHA_URL}/api/sendText`, {
+      const response = await fetch(`${WAHA_URL}/api/forwardMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session: WAHA_SESSION,
           chatId,
-          id: null,
-          text: texto,
-          linkPreview: false,
-          linkPreviewHighQuality: false
-        })
-      });
+          messageId
+  })
+});
 
       const data = await response.json().catch(() => ({}));
 
@@ -2306,8 +2313,9 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
         senderName: "STU Atendimento",
         text: texto,
         direction: "sent",
-        waMessageId: data?.id || data?.key?.id || null
-      });
+        waMessageId: data?.id || data?.key?.id || data?.messageId || null,
+        forwarded: true
+});
 
       addConversationHistory(conversaDestino, "encaminhou_mensagem", req.user?.name || "Sistema", {
         origemJid: message.jid || message.sourceJid || null,
