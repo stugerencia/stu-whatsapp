@@ -908,6 +908,8 @@ if (!clientChat.realPhone && !clientChat.telefone) {
     clientChat.phoneUnavailableReason || "Número real não disponível";
 }
 
+  }
+
   return clientChat;
 }
 
