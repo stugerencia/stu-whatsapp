@@ -107,33 +107,110 @@ function getConversationList() {
   });
 }
 
-function findConversationByJid(jid = "") {
-  const internalJid = toInternalPhoneJid(jid);
-  return getConversationList().find(c => c.jid === internalJid || c.jid === jid);
-}
+function getBrazilPhoneVariants(phone = "") {
+  const normalized = normalizePhone(phone);
+  const variants = new Set();
 
-function canSendInConversation(conversa) {
-  if (!conversa) return false;
-  if (isGroupJid(conversa.jid)) return true;
-  if (conversa.conversationType === "grupo_operacional") return true;
-  if (conversa.type === "grupo_operacional") return true;
-  return conversa.status === "em_atendimento";
-}
+  if (!normalized) return [];
 
-function getConversationListByUser(userName, role = "atendente") {
-  const conversas = getConversationList();
+  variants.add(normalized);
 
-  if (role === "admin") {
-    return conversas;
+  // Brasil: 55 + DDD + número com nono dígito
+  if (
+    normalized.startsWith("55") &&
+    normalized.length === 13 &&
+    normalized[4] === "9"
+  ) {
+    variants.add(normalized.slice(0, 4) + normalized.slice(5));
   }
 
-  return conversas.filter(c => {
-    return (
-      c.status === "nova" ||
-      c.attendant === userName ||
-      c.openedBy === userName ||
-      c.finishedBy === userName
-    );
+  // Brasil: 55 + DDD + número antigo sem o nono dígito
+  if (
+    normalized.startsWith("55") &&
+    normalized.length === 12
+  ) {
+    variants.add(normalized.slice(0, 4) + "9" + normalized.slice(4));
+  }
+
+  return [...variants];
+}
+
+function getEquivalentJidCandidates(jid = "") {
+  const candidates = new Set();
+
+  if (!jid) return [];
+
+  const internalJid = toInternalPhoneJid(jid);
+
+  candidates.add(jid);
+  candidates.add(internalJid);
+
+  if (isGroupJid(internalJid)) {
+    return [...candidates];
+  }
+
+  if (isLidJid(internalJid)) {
+    const lid = cleanJid(internalJid);
+    const mappedPhone = lidToPhone[lid];
+
+    if (mappedPhone) {
+      for (const phone of getBrazilPhoneVariants(mappedPhone)) {
+        candidates.add(`${phone}@s.whatsapp.net`);
+        candidates.add(`${phone}@c.us`);
+
+        const mappedLid = phoneToLid[phone];
+        if (mappedLid) {
+          candidates.add(`${mappedLid}@lid`);
+        }
+      }
+    }
+
+    return [...candidates];
+  }
+
+  if (isPhoneJid(internalJid)) {
+    const phone = cleanJid(internalJid);
+
+    for (const variant of getBrazilPhoneVariants(phone)) {
+      candidates.add(`${variant}@s.whatsapp.net`);
+      candidates.add(`${variant}@c.us`);
+
+      const mappedLid = phoneToLid[variant];
+      if (mappedLid) {
+        candidates.add(`${mappedLid}@lid`);
+      }
+    }
+  }
+
+  return [...candidates];
+}
+
+function findConversationByJid(jid = "") {
+  const candidates = getEquivalentJidCandidates(jid);
+
+  return getConversationList().find(conversa => {
+    const conversationValues = new Set([
+      conversa.jid,
+      conversa.whatsappId,
+      conversa.lid ? `${conversa.lid}@lid` : null,
+      conversa.clientPhone
+        ? `${normalizePhone(conversa.clientPhone)}@s.whatsapp.net`
+        : null,
+      conversa.realPhone
+        ? `${normalizePhone(conversa.realPhone)}@s.whatsapp.net`
+        : null,
+      conversa.telefone
+        ? `${normalizePhone(conversa.telefone)}@s.whatsapp.net`
+        : null
+    ].filter(Boolean));
+
+    for (const value of conversationValues) {
+      for (const equivalent of getEquivalentJidCandidates(value)) {
+        conversationValues.add(equivalent);
+      }
+    }
+
+    return candidates.some(candidate => conversationValues.has(candidate));
   });
 }
 
@@ -774,7 +851,7 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
     return groupChat;
   }
 
-  let clientChat = clientConversations.find(c => c.jid === jid);
+  let clientChat = findConversationByJid(jid);
 
   const lid = isLidJid(jid) ? cleanJid(jid) : null;
   const realPhone = findMappedPhone(jid);
@@ -812,12 +889,24 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       clientChat.clientName = displayName;
     }
 
-    clientChat.clientPhone = clientPhone;
-    clientChat.realPhone = realPhone;
-    clientChat.telefone = realPhone;
-    clientChat.lid = lid;
-    clientChat.phoneUnavailableReason = realPhone ? null : "Número real não disponível";
-  }
+    if (!clientChat.clientPhone) {
+  clientChat.clientPhone = clientPhone;
+}
+
+if (realPhone) {
+  clientChat.realPhone = realPhone;
+  clientChat.telefone = realPhone;
+  clientChat.phoneUnavailableReason = null;
+}
+
+if (lid) {
+  clientChat.lid = lid;
+}
+
+if (!clientChat.realPhone && !clientChat.telefone) {
+  clientChat.phoneUnavailableReason =
+    clientChat.phoneUnavailableReason || "Número real não disponível";
+}
 
   return clientChat;
 }
@@ -2158,7 +2247,7 @@ if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessag
 
 const chatId = quotedMessage?.waMessageId?.includes("_")
   ? quotedMessage.waMessageId.split("_")[1]
-  : toWahaChatId(jid);
+  : toWahaChatId(conversa.jid);
 
 console.log("ENVIANDO PARA WAHA:", {
   session: WAHA_SESSION,
@@ -2197,7 +2286,7 @@ reply_to: quotedMessage?.waMessageId || undefined
     }
 
     await saveMessage({
-      jid: toInternalPhoneJid(jid),
+      jid: conversa.jid,
       sender: "sistema",
       senderName: "STU Atendimento",
       text: mensagem,
@@ -2205,7 +2294,13 @@ reply_to: quotedMessage?.waMessageId || undefined
       waMessageId: data?.id || data?.key?.id || null
     });
 
-    res.json({ sucesso: true, jid: toInternalPhoneJid(jid), mensagem, waha: data });
+  res.json({
+     sucesso: true,
+     jid: conversa.jid,
+     mensagem,
+     waha: data
+});
+    
   } catch (error) {
     console.error("Erro ao enviar mensagem:", error);
     res.status(500).json({ erro: "Erro ao enviar mensagem", detalhe: error.message });
@@ -2433,7 +2528,7 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
       });
     }
 
-    const chatId = toWahaChatId(jid);
+    const chatId = toWahaChatId(conversa.jid);
     const finalMimeType = mimeType || "application/octet-stream";
     const finalFileName =
       fileName || `${Date.now()}.${getExtensionFromMime(finalMimeType)}`;
@@ -2492,7 +2587,7 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
     }
 
     await saveMessage({
-      jid: toInternalPhoneJid(jid),
+      jid: conversa.jid,
       sender: "sistema",
       senderName: "STU Atendimento",
       text: caption || "",
@@ -2507,7 +2602,7 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
 
     return res.json({
       sucesso: true,
-      jid: toInternalPhoneJid(jid),
+      jid: conversa.jid,
       mediaType,
       media: savedMedia,
       waha: data
