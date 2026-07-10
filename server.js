@@ -1190,10 +1190,28 @@ app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => 
     users.push(user);
     await saveUsers();
 
-    return res.json({
-      sucesso: true,
-      user: publicUser(user)
-    });
+const enviados = resultados.filter(item => item.sucesso === true);
+const falhas = resultados.filter(item => item.sucesso !== true);
+
+if (enviados.length === 0) {
+  return res.status(502).json({
+    sucesso: false,
+    erro: "Não foi possível encaminhar a mensagem",
+    total: destinations.length,
+    enviados: 0,
+    falhas: falhas.length,
+    resultados
+  });
+}
+
+  return res.json({
+    sucesso: falhas.length === 0,
+    parcial: falhas.length > 0,
+    total: destinations.length,
+    enviados: enviados.length,
+    falhas: falhas.length,
+    resultados
+});
 
   } catch (error) {
     console.error("Erro ao criar usuário:", error);
