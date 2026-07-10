@@ -1165,8 +1165,8 @@ app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => 
       });
     }
 
-    const exists = users.find(u =>
-      u.email.toLowerCase() === String(email).toLowerCase()
+    const exists = users.find(
+      user => user.email.toLowerCase() === String(email).toLowerCase()
     );
 
     if (exists) {
@@ -1190,31 +1190,14 @@ app.post("/criar-usuario", authenticateToken, requireAdmin, async (req, res) => 
     users.push(user);
     await saveUsers();
 
-const enviados = resultados.filter(item => item.sucesso === true);
-const falhas = resultados.filter(item => item.sucesso !== true);
-
-if (enviados.length === 0) {
-  return res.status(502).json({
-    sucesso: false,
-    erro: "Não foi possível encaminhar a mensagem",
-    total: destinations.length,
-    enviados: 0,
-    falhas: falhas.length,
-    resultados
-  });
-}
-
-  return res.json({
-    sucesso: falhas.length === 0,
-    parcial: falhas.length > 0,
-    total: destinations.length,
-    enviados: enviados.length,
-    falhas: falhas.length,
-    resultados
-});
+    return res.json({
+      sucesso: true,
+      user: publicUser(user)
+    });
 
   } catch (error) {
     console.error("Erro ao criar usuário:", error);
+
     return res.status(500).json({
       sucesso: false,
       erro: error.message
@@ -2247,22 +2230,27 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
       });
     }
 
-    const texto = message.text || message.body || "";
-    const messageId = message.waMessageId || message.messageId || null;
+    const messageId =
+      message.waMessageId ||
+      message.messageId ||
+      null;
 
-if (!messageId) {
-  return res.status(400).json({
-    sucesso: false,
-    erro: "A mensagem original não possui waMessageId para encaminhamento nativo"
-  });
-}
-
-    if (!texto || String(texto).trim() === "") {
+    if (!messageId) {
       return res.status(400).json({
         sucesso: false,
-        erro: "Nesta etapa, apenas mensagens de texto podem ser encaminhadas"
+        erro: "A mensagem original não possui waMessageId para encaminhamento"
       });
     }
+
+    const texto =
+      message.text ||
+      message.body ||
+      "";
+
+    const mediaType =
+      message.mediaType && message.mediaType !== "none"
+        ? message.mediaType
+        : "none";
 
     const resultados = [];
 
@@ -2270,14 +2258,17 @@ if (!messageId) {
       const jidDestino =
         typeof destino === "string"
           ? destino
-          : destino.jid || destino.whatsappId || destino.id;
+          : destino?.jid ||
+            destino?.whatsappId ||
+            destino?.id;
 
       if (!jidDestino) {
         resultados.push({
           destino,
           sucesso: false,
-          erro: "Destino sem jid"
+          erro: "Destino sem JID"
         });
+
         continue;
       }
 
@@ -2289,15 +2280,17 @@ if (!messageId) {
           sucesso: false,
           erro: "Conversa de destino não encontrada"
         });
+
         continue;
       }
 
       if (!canSendInConversation(conversaDestino)) {
         resultados.push({
-          destino: jidDestino,
+          destino: conversaDestino.jid,
           sucesso: false,
           erro: "Conversa de destino precisa estar assumida antes do encaminhamento"
         });
+
         continue;
       }
 
@@ -2305,13 +2298,15 @@ if (!messageId) {
 
       const response = await fetch(`${WAHA_URL}/api/forwardMessage`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           session: WAHA_SESSION,
           chatId,
           messageId
-  })
-});
+        })
+      });
 
       const data = await response.json().catch(() => ({}));
 
@@ -2320,8 +2315,10 @@ if (!messageId) {
           destino: conversaDestino.jid,
           sucesso: false,
           erro: "Erro ao encaminhar pelo WAHA",
+          status: response.status,
           detalhe: data
         });
+
         continue;
       }
 
@@ -2331,20 +2328,66 @@ if (!messageId) {
         senderName: "STU Atendimento",
         text: texto,
         direction: "sent",
-        waMessageId: data?.id || data?.key?.id || data?.messageId || null,
+        waMessageId:
+          data?.id ||
+          data?.key?.id ||
+          data?.messageId ||
+          null,
+        mediaType,
+        mediaUrl: message.mediaUrl || null,
+        mediaName: message.mediaName || null,
+        mimeType: message.mimeType || null,
+        fileSize: message.fileSize || null,
         forwarded: true
-});
-
-      addConversationHistory(conversaDestino, "encaminhou_mensagem", req.user?.name || "Sistema", {
-        origemJid: message.jid || message.sourceJid || null,
-        mensagemOriginalId: message.id || message.waMessageId || null,
-        tipo: "texto"
       });
+
+      addConversationHistory(
+        conversaDestino,
+        "encaminhou_mensagem",
+        req.user?.name || "Sistema",
+        {
+          origemJid:
+            message.jid ||
+            message.sourceJid ||
+            null,
+          mensagemOriginalId:
+            message.id ||
+            message.waMessageId ||
+            null,
+          tipo:
+            mediaType !== "none"
+              ? mediaType
+              : "texto"
+        }
+      );
 
       resultados.push({
         destino: conversaDestino.jid,
         sucesso: true,
+        tipo:
+          mediaType !== "none"
+            ? mediaType
+            : "texto",
         waha: data
+      });
+    }
+
+    const enviados = resultados.filter(
+      item => item.sucesso === true
+    );
+
+    const falhas = resultados.filter(
+      item => item.sucesso !== true
+    );
+
+    if (enviados.length === 0) {
+      return res.status(502).json({
+        sucesso: false,
+        erro: "Não foi possível encaminhar a mensagem",
+        total: destinations.length,
+        enviados: 0,
+        falhas: falhas.length,
+        resultados
       });
     }
 
@@ -2352,13 +2395,17 @@ if (!messageId) {
     emitConversationsToConnectedUsers();
 
     return res.json({
-      sucesso: true,
+      sucesso: falhas.length === 0,
+      parcial: falhas.length > 0,
       total: destinations.length,
+      enviados: enviados.length,
+      falhas: falhas.length,
       resultados
     });
 
   } catch (error) {
     console.error("Erro em /encaminhar-mensagem:", error);
+
     return res.status(500).json({
       sucesso: false,
       erro: error.message
