@@ -2095,7 +2095,29 @@ app.post("/enviar", authenticateToken, async (req, res) => {
   return res.status(400).json({ erro: "Informe jid e mensagem" });
 }
 
-const conversa = findConversationByJid(jid);
+const internalJid = toInternalPhoneJid(jid);
+
+let conversa = findConversationByJid(internalJid);
+
+if (!conversa) {
+  conversa = await getOrCreateConversation(
+    internalJid,
+    isGroupJid(internalJid),
+    cleanJid(internalJid)
+  );
+
+  conversa.status = "em_atendimento";
+  conversa.attendant = req.user?.name || "Sistema";
+  conversa.openedAt = new Date().toISOString();
+  conversa.openedBy = conversa.attendant;
+  conversa.unreadCount = 0;
+
+  addConversationHistory(conversa, "criou_conversa", conversa.attendant, {
+    motivo: "Nova conversa iniciada manualmente."
+  });
+
+  await saveConversations();
+}
 
 if (!canSendInConversation(conversa)) {
   const isSystemMessage =
