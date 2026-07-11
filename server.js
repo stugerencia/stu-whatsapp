@@ -311,6 +311,19 @@ function toWahaChatId(jid = "") {
   return jid;
 }
 
+function buildWahaMessageId(chatId, data) {
+  if (data?.id && typeof data.id === "string" && data.id.includes("_")) {
+    return data.id;
+  }
+
+  if (data?.key?.id) {
+    const fromMe = data.key.fromMe !== false;
+    return `${fromMe ? "true" : "false"}_${chatId}_${data.key.id}`;
+  }
+
+  return data?.messageId || null;
+}
+
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(MEDIA_DIR, { recursive: true });
@@ -2340,7 +2353,7 @@ reply_to: quotedMessage?.waMessageId || undefined
       senderName: "STU Atendimento",
       text: mensagem,
       direction: "sent",
-      waMessageId: data?.id || data?.key?.id || null
+      waMessageId: buildWahaMessageId(chatId, data)
     });
 
   res.json({
@@ -2508,11 +2521,7 @@ if (conversaDestino) {
         senderName: "STU Atendimento",
         text: texto,
         direction: "sent",
-        waMessageId:
-          data?.id ||
-          data?.key?.id ||
-          data?.messageId ||
-          null,
+        waMessageId: buildWahaMessageId(chatId, data),
         mediaType,
         mediaUrl: message.mediaUrl || null,
         mediaName: message.mediaName || null,
@@ -2687,7 +2696,7 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
       senderName: "STU Atendimento",
       text: caption || "",
       direction: "sent",
-      waMessageId: data?.id || data?.key?.id || data?.messageId || null,
+      waMessageId: buildWahaMessageId(chatId, data),
       mediaType,
       mediaUrl: savedMedia.mediaUrl,
       mediaName: savedMedia.mediaName,
