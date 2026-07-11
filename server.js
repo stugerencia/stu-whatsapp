@@ -1053,8 +1053,27 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
     message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
     message.updatedAt = new Date().toISOString();
 
-    io.emit("mensagemApagada", { jid: internalJid, waMessageId: deletedWaMessageId, message, conversation: chat });
-   emitConversationsToConnectedUsers();
+    for (const [socketId, socket] of io.sockets.sockets) {
+      const userName = socket.data?.userName;
+      const role = socket.data?.role || "atendente";
+
+      const conversasPermitidas = userName
+        ? getConversationListByUser(userName, role)
+        : getConversationList();
+
+      const podeVerConversa = conversasPermitidas.some(c => c.jid === chat.jid);
+
+      if (podeVerConversa) {
+        socket.emit("mensagemApagada", {
+          jid: internalJid,
+          waMessageId: deletedWaMessageId,
+          message,
+          conversation: chat
+        });
+      }
+    }
+
+    emitConversationsToConnectedUsers();
 
     return true;
   }
@@ -1536,16 +1555,9 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.get("/conversas-usuario", (req, res) => {
-  const userName = req.query.userName;
-  const role = req.query.role || "atendente";
-
-  if (!userName) {
-    return res.status(400).json({
-      sucesso: false,
-      erro: "Informe userName"
-    });
-  }
+app.get("/conversas-usuario", authenticateToken, (req, res) => {
+  const userName = req.user.name;
+  const role = req.user.role || "atendente";
 
   const conversas = getConversationListByUser(userName, role);
 
@@ -1557,6 +1569,7 @@ app.get("/conversas-usuario", (req, res) => {
     conversas
   });
 });
+
 app.post("/marcar-lida", authenticateToken, async (req, res) => {
   try {
     const { jid } = req.body;
@@ -2047,7 +2060,7 @@ app.post("/excluir-etiqueta", authenticateToken, requireAdmin, async (req, res) 
   }
 });
 
-app.post("/adicionar-etiqueta", async (req, res) => {
+app.post("/adicionar-etiqueta", authenticateToken, async (req, res) => {
   try {
     const { jid, tagId } = req.body;
 
@@ -2105,7 +2118,7 @@ app.post("/adicionar-etiqueta", async (req, res) => {
   }
 });
 
-app.post("/remover-etiqueta", async (req, res) => {
+app.post("/remover-etiqueta", authenticateToken, async (req, res) => {
   try {
     const { jid, tagId } = req.body;
 
@@ -2197,7 +2210,7 @@ app.post("/waha-webhook", async (req, res) => {
   }
 });
 
-app.post("/mapear-telefone", async (req, res) => {
+app.post("/mapear-telefone", authenticateToken, async (req, res) => {
   const { lid, telefone } = req.body;
 
   if (!lid || !telefone) {
@@ -2221,7 +2234,7 @@ app.post("/enviar", authenticateToken, async (req, res) => {
     const { jid, mensagem, quotedMessage } = req.body;
 
     if (!jid || !mensagem) {
-  return res.status(400).json({ erro: "Informe jid e mensagem" });
+  return res.status(400).json({ sucesso: false, erro: "Informe jid e mensagem" });
 }
 
 const internalJid = toInternalPhoneJid(jid);
@@ -2249,12 +2262,6 @@ if (!conversa) {
 }
 
 if (!canSendInConversation(conversa)) {
-  const isSystemMessage =
-    String(mensagem || "").includes("seu atendimento foi finalizado") ||
-    String(mensagem || "").includes("Obrigado pelo contato") ||
-    String(mensagem || "").includes("Bem-vindo") ||
-    String(mensagem || "").includes("Olá");
-
   const isFinalizationMessage =
   String(mensagem || "").includes("seu atendimento foi finalizado") ||
   String(mensagem || "").includes("Obrigado pelo contato");
@@ -2262,6 +2269,8 @@ if (!canSendInConversation(conversa)) {
 const isReopenMessage =
   String(mensagem || "").includes("Bem-vindo") ||
   String(mensagem || "").includes("Olá");
+
+const isSystemMessage = isFinalizationMessage || isReopenMessage;
 
 if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessage) {
   conversa.status = "em_atendimento";
@@ -2340,7 +2349,7 @@ reply_to: quotedMessage?.waMessageId || undefined
     
   } catch (error) {
     console.error("Erro ao enviar mensagem:", error);
-    res.status(500).json({ erro: "Erro ao enviar mensagem", detalhe: error.message });
+    res.status(500).json({ sucesso: false, erro: "Erro ao enviar mensagem", detalhe: error.message });
   }
 });
 
@@ -2396,6 +2405,10 @@ console.log("Mensagem:", {
 });
 
     for (const destino of destinations) {
+      const jidDestino =
+        typeof destino === "string"
+          ? destino
+          : destino?.jid || destino?.whatsappId || null;
 
       if (!jidDestino) {
         resultados.push({
@@ -2408,7 +2421,8 @@ console.log("Mensagem:", {
       }
 
       const conversaDestino = findConversationByJid(jidDestino);
-      console.log("Conversa encontrada:", !!conversaDestino);
+      
+  console.log("Conversa encontrada:", !!conversaDestino);
 
 if (conversaDestino) {
     console.log({
@@ -2583,7 +2597,14 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
       });
     }
 
-    const conversa = findConversationByJid(jid);
+   const conversa = findConversationByJid(jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
 
     if (!canSendInConversation(conversa)) {
       return res.status(403).json({
