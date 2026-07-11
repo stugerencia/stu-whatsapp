@@ -214,6 +214,41 @@ function findConversationByJid(jid = "") {
   });
 }
 
+function canSendInConversation(conversa) {
+  if (!conversa) return false;
+
+  if (isGroupJid(conversa.jid)) {
+    return true;
+  }
+
+  if (conversa.conversationType === "grupo_operacional") {
+    return true;
+  }
+
+  if (conversa.type === "grupo_operacional") {
+    return true;
+  }
+
+  return conversa.status === "em_atendimento";
+}
+
+function getConversationListByUser(userName, role = "atendente") {
+  const conversas = getConversationList();
+
+  if (role === "admin") {
+    return conversas;
+  }
+
+  return conversas.filter(conversa => {
+    return (
+      conversa.status === "nova" ||
+      conversa.attendant === userName ||
+      conversa.openedBy === userName ||
+      conversa.finishedBy === userName
+    );
+  });
+}
+
 function emitConversationsToConnectedUsers() {
   for (const [socketId, socket] of io.sockets.sockets) {
     const userName = socket.data?.userName;
