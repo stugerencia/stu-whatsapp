@@ -2386,8 +2386,20 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
 
     const resultados = [];
 
+console.log("========== INÍCIO ENCAMINHAMENTO ==========");
+console.log("Destinos:", destinations);
+console.log("Mensagem:", {
+    id: message.id,
+    waMessageId: message.waMessageId,
+    mediaType: message.mediaType,
+    text: message.text
+});
+
     for (const destino of destinations) {
       const jidDestino =
+console.log("----------------------------------------");
+console.log("Destino recebido:", destino);
+console.log("JID destino:", jidDestino);
         typeof destino === "string"
           ? destino
           : destino?.jid ||
@@ -2405,6 +2417,16 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
       }
 
       const conversaDestino = findConversationByJid(jidDestino);
+      console.log("Conversa encontrada:", !!conversaDestino);
+
+if (conversaDestino) {
+    console.log({
+        jid: conversaDestino.jid,
+        status: conversaDestino.status,
+        attendant: conversaDestino.attendant,
+        isGroup: isGroupJid(conversaDestino.jid)
+    });
+}
 
       if (!conversaDestino) {
         resultados.push({
@@ -2416,6 +2438,12 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
         continue;
       }
 
+      console.log(
+    "Pode enviar:",
+    conversaDestino
+        ? canSendInConversation(conversaDestino)
+        : false
+);
       if (!canSendInConversation(conversaDestino)) {
         resultados.push({
           destino: conversaDestino.jid,
@@ -2440,8 +2468,13 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
         })
       });
 
+      console.log("HTTP WAHA:", response.status);
+      
       const data = await response.json().catch(() => ({}));
 
+      console.log("Resposta WAHA:");
+      console.dir(data, { depth: null });
+      
       if (!response.ok) {
         resultados.push({
           destino: conversaDestino.jid,
@@ -2524,16 +2557,19 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
     }
 
     await saveConversations();
-    emitConversationsToConnectedUsers();
+emitConversationsToConnectedUsers();
 
-    return res.json({
-      sucesso: falhas.length === 0,
-      parcial: falhas.length > 0,
-      total: destinations.length,
-      enviados: enviados.length,
-      falhas: falhas.length,
-      resultados
-    });
+console.log("========== RESULTADO FINAL ==========");
+console.dir(resultados, { depth: null });
+
+return res.json({
+    sucesso: falhas.length === 0,
+    parcial: falhas.length > 0,
+    total: destinations.length,
+    enviados: enviados.length,
+    falhas: falhas.length,
+    resultados
+});
 
   } catch (error) {
     console.error("Erro em /encaminhar-mensagem:", error);
