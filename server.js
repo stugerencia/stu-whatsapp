@@ -1280,13 +1280,15 @@ async function processarMensagemApagadaWaha(body) {
     // o conteúdo de mensagens apagadas nos logs do Railway.
     console.log("🗑️ estrutura do payload de message.revoked:", {
       chavesDoPayload: Object.keys(payload),
+      revokedMessageId: payload.revokedMessageId || null,
       temBefore: !!payload.before,
       temAfter: !!payload.after,
       beforeId: payload.before?.id || null,
       afterId: payload.after?.id || null,
       payloadId: payload.id || null,
       chatId: payload.chatId || null,
-      from: payload.from || null
+      from: payload.from || null,
+      dataKeys: payload._data ? Object.keys(payload._data) : null
     });
 
     const rawJid =
@@ -1295,6 +1297,7 @@ async function processarMensagemApagadaWaha(body) {
       payload._data?.key?.remoteJid;
 
     const deletedId =
+      payload.revokedMessageId ||
       payload.before?.id ||
       payload.after?.id ||
       payload.id ||
