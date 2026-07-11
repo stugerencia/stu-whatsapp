@@ -1050,7 +1050,10 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
   if (message) {
     message.deletedInWhatsApp = true;
     message.preservedInSystem = true;
-    message.deletedNotice = "Mensagem apagada no WhatsApp, preservada no sistema";
+    message.deletedNotice =
+      message.direction === "received"
+        ? "Mensagem apagada pelo cliente"
+        : "Mensagem apagada no WhatsApp";
     message.updatedAt = new Date().toISOString();
 
     for (const [socketId, socket] of io.sockets.sockets) {
@@ -2383,6 +2386,13 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
       });
     }
 
+    if (message.deletedInWhatsApp) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Não é possível encaminhar uma mensagem apagada no WhatsApp"
+      });
+    }
+
     const texto =
       message.text ||
       message.body ||
@@ -2698,6 +2708,83 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
     return res.status(500).json({
       sucesso: false,
       erro: "Erro ao enviar mídia",
+      detalhe: error.message
+    });
+  }
+});
+
+app.post("/apagar-mensagem", authenticateToken, async (req, res) => {
+  try {
+    const { jid, waMessageId } = req.body;
+
+    if (!jid || !waMessageId) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid e waMessageId"
+      });
+    }
+
+    const conversa = findConversationByJid(jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const chatId = toWahaChatId(conversa.jid);
+    const encodedChatId = encodeURIComponent(chatId);
+    const encodedMessageId = encodeURIComponent(waMessageId);
+
+    const response = await fetch(
+      `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodedChatId}/messages/${encodedMessageId}`,
+      { method: "DELETE" }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao apagar mensagem pelo WAHA",
+        detalhe: data
+      });
+    }
+
+    const message = conversa.messages.find(m => m.waMessageId === waMessageId);
+
+    const atendenteResponsavel =
+      conversa.attendant || req.user?.name || "Sistema";
+
+    if (message) {
+      message.deletedInWhatsApp = true;
+      message.preservedInSystem = true;
+      message.deletedByAttendant = atendenteResponsavel;
+      message.deletedNotice = `Mensagem apagada pelo atendente ${atendenteResponsavel}`;
+      message.updatedAt = new Date().toISOString();
+    }
+
+    addConversationHistory(conversa, "apagou_mensagem", req.user?.name || "Sistema", {
+      waMessageId,
+      atendenteResponsavel
+    });
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid: conversa.jid,
+      waMessageId,
+      deletedNotice: message?.deletedNotice || null
+    });
+
+  } catch (error) {
+    console.error("Erro ao apagar mensagem:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao apagar mensagem",
       detalhe: error.message
     });
   }
