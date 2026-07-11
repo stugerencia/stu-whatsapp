@@ -2397,34 +2397,6 @@ console.log("Mensagem:", {
 
     for (const destino of destinations) {
 
-    const jidDestino =
-        typeof destino === "string"
-            ? destino
-            : destino?.jid ||
-              destino?.whatsappId ||
-              destino?.id;
-
-    console.log("----------------------------------------");
-    console.log("Destino recebido:", destino);
-    console.log("JID destino:", jidDestino);
-
-    if (!jidDestino) {
-        resultados.push({
-            destino,
-            sucesso: false,
-            erro: "Destino sem JID"
-        });
-
-        continue;
-    }
-
-    const conversaDestino = findConversationByJid(jidDestino);
-    console.log("Conversa encontrada:", !!conversaDestino);
-
-    if (conversaDestino) {
-        console.log(conversaDestino);
-    }
-
       if (!jidDestino) {
         resultados.push({
           destino,
