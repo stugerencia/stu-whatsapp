@@ -324,6 +324,15 @@ function buildWahaMessageId(chatId, data) {
   return data?.messageId || null;
 }
 
+// Extrai só a parte final do ID (depois do último "_"), pois o WAHA às vezes
+// entrega o waMessageId completo ({fromMe}_{chatId}_{id}) e às vezes só o id cru,
+// dependendo do evento (message vs message.revoked).
+function extractRawMessageId(waMessageId) {
+  if (!waMessageId || typeof waMessageId !== "string") return waMessageId;
+  const parts = waMessageId.split("_");
+  return parts[parts.length - 1];
+}
+
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.mkdir(MEDIA_DIR, { recursive: true });
@@ -1062,15 +1071,30 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
 
   if (!chat) return false;
 
-  const message = chat.messages.find(m => m.waMessageId === deletedWaMessageId);
+  const rawDeletedId = extractRawMessageId(deletedWaMessageId);
+  const message = chat.messages.find(m => extractRawMessageId(m.waMessageId) === rawDeletedId);
 
   console.log("🔎 markDeletedMessage - busca de mensagem:", {
     deletedWaMessageId,
+    rawDeletedId,
     mensagemEncontrada: !!message,
-    ultimosWaMessageIds: chat.messages.slice(-5).map(m => m.waMessageId)
+    ultimosWaMessageIds: chat.messages.slice(-5).map(m => ({
+      waMessageId: m.waMessageId,
+      rawId: extractRawMessageId(m.waMessageId)
+    }))
   });
 
   if (message) {
+    // Idempotência: se a mensagem já foi marcada como apagada (ex: pelo atendente
+    // via /apagar-mensagem), não sobrescreve o aviso mais específico que já existe.
+    if (message.deletedInWhatsApp) {
+      console.log("ℹ️ markDeletedMessage - mensagem já estava marcada como apagada, ignorando:", {
+        waMessageId: message.waMessageId,
+        deletedNoticeAtual: message.deletedNotice
+      });
+      return true;
+    }
+
     message.deletedInWhatsApp = true;
     message.preservedInSystem = true;
     message.deletedNotice =
@@ -1250,14 +1274,38 @@ await saveMessage({
 async function processarMensagemApagadaWaha(body) {
   try {
     const payload = body.payload || {};
-    const rawJid = payload.from || payload.chatId || payload._data?.key?.remoteJid;
+
+    // Log estrutural (sem conteúdo de mensagem) só para confirmar quais campos
+    // existem neste payload — nunca loga "body"/texto, para não expor
+    // o conteúdo de mensagens apagadas nos logs do Railway.
+    console.log("🗑️ estrutura do payload de message.revoked:", {
+      chavesDoPayload: Object.keys(payload),
+      temBefore: !!payload.before,
+      temAfter: !!payload.after,
+      beforeId: payload.before?.id || null,
+      afterId: payload.after?.id || null,
+      payloadId: payload.id || null,
+      chatId: payload.chatId || null,
+      from: payload.from || null
+    });
+
+    const rawJid =
+      payload.from ||
+      payload.chatId ||
+      payload._data?.key?.remoteJid;
+
     const deletedId =
+      payload.before?.id ||
+      payload.after?.id ||
       payload.id ||
       payload.messageId ||
       payload._data?.protocolMessage?.key?.id ||
       payload._data?.key?.id;
 
-    if (!rawJid || !deletedId) return;
+    if (!rawJid || !deletedId) {
+      console.log("⚠️ message.revoked ignorado - jid ou id ausente:", { rawJid, deletedId });
+      return;
+    }
 
     await markDeletedMessage(rawJid, deletedId);
   } catch (error) {
@@ -2216,11 +2264,7 @@ app.post("/waha-webhook", async (req, res) => {
   await processarMensagemWaha(req.body);
 }
 
-    if (
-      req.body?.event === "message.revoked" ||
-      req.body?.event === "message.reaction" ||
-      req.body?.event === "message.deleted"
-    ) {
+   if (req.body?.event === "message.revoked") {
       await processarMensagemApagadaWaha(req.body);
     }
 
