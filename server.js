@@ -1052,13 +1052,23 @@ async function saveMessage({
 }
 
 async function markDeletedMessage(jid, deletedWaMessageId) {
-  const internalJid = toInternalPhoneJid(jid);
-  const list = isGroupJid(internalJid) ? groupConversations : clientConversations;
-  const chat = list.find(c => c.jid === internalJid);
+  const chat = findConversationByJid(jid);
+
+  console.log("🔎 markDeletedMessage - busca de conversa:", {
+    jidRecebido: jid,
+    conversaEncontrada: !!chat,
+    chatJid: chat?.jid || null
+  });
 
   if (!chat) return false;
 
   const message = chat.messages.find(m => m.waMessageId === deletedWaMessageId);
+
+  console.log("🔎 markDeletedMessage - busca de mensagem:", {
+    deletedWaMessageId,
+    mensagemEncontrada: !!message,
+    ultimosWaMessageIds: chat.messages.slice(-5).map(m => m.waMessageId)
+  });
 
   if (message) {
     message.deletedInWhatsApp = true;
@@ -1081,7 +1091,7 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
 
       if (podeVerConversa) {
         socket.emit("mensagemApagada", {
-          jid: internalJid,
+          jid: chat.jid,
           waMessageId: deletedWaMessageId,
           message,
           conversation: chat
@@ -1090,12 +1100,13 @@ async function markDeletedMessage(jid, deletedWaMessageId) {
     }
 
     emitConversationsToConnectedUsers();
+    await saveConversations();
 
     return true;
   }
 
   await saveMessage({
-    jid: internalJid,
+    jid: chat.jid,
     sender: "sistema",
     senderName: "Sistema",
     text: "Uma mensagem foi apagada no WhatsApp, mas não foi encontrada no histórico local.",
