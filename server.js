@@ -1328,6 +1328,99 @@ async function processarMensagemApagadaWaha(body) {
   }
 }
 
+async function processarReacaoWaha(body) {
+  try {
+    const payload = body.payload || {};
+
+    // Log estrutural (sem conteúdo de mensagem) para confirmar os nomes reais
+    // dos campos nesta engine — a documentação genérica da WAHA é pro WEBJS,
+    // e a NOWEB já nos surpreendeu antes com nomes diferentes (revokedMessageId).
+    console.log("👍 estrutura do payload de message.reaction:", {
+      chavesDoPayload: Object.keys(payload),
+      temReaction: !!payload.reaction,
+      reactionKeys: payload.reaction ? Object.keys(payload.reaction) : null,
+      reactionText: payload.reaction?.text ?? null,
+      reactionMessageId: payload.reaction?.messageId || payload.reaction?.reactedMessageId || null,
+      from: payload.from || null,
+      chatId: payload.chatId || null,
+      fromMe: payload.fromMe ?? null
+    });
+
+    const rawJid =
+      payload.from ||
+      payload.chatId ||
+      payload._data?.key?.remoteJid;
+
+    const reactionMessageId =
+      payload.reaction?.messageId ||
+      payload.reaction?.reactedMessageId ||
+      payload.reactionMessageId ||
+      null;
+
+    const reactionText = payload.reaction?.text ?? null;
+
+    if (!rawJid || !reactionMessageId) {
+      console.log("⚠️ message.reaction ignorado - jid ou messageId ausente:", { rawJid, reactionMessageId });
+      return;
+    }
+
+    const chat = findConversationByJid(rawJid);
+
+    if (!chat) {
+      console.log("⚠️ message.reaction - conversa não encontrada:", { rawJid });
+      return;
+    }
+
+    const rawTargetId = extractRawMessageId(reactionMessageId);
+    const message = chat.messages.find(m => extractRawMessageId(m.waMessageId) === rawTargetId);
+
+    if (!message) {
+      console.log("⚠️ message.reaction - mensagem reagida não encontrada:", {
+        reactionMessageId,
+        rawTargetId
+      });
+      return;
+    }
+
+    // Texto vazio ("") significa que a reação foi removida
+    if (reactionText) {
+      message.reaction = {
+        emoji: reactionText,
+        by: payload.fromMe ? "atendente" : "cliente",
+        updatedAt: new Date().toISOString()
+      };
+    } else {
+      message.reaction = null;
+    }
+
+    for (const [socketId, socket] of io.sockets.sockets) {
+      const userName = socket.data?.userName;
+      const role = socket.data?.role || "atendente";
+
+      const conversasPermitidas = userName
+        ? getConversationListByUser(userName, role)
+        : getConversationList();
+
+      const podeVerConversa = conversasPermitidas.some(c => c.jid === chat.jid);
+
+      if (podeVerConversa) {
+        socket.emit("mensagemReagida", {
+          jid: chat.jid,
+          waMessageId: message.waMessageId,
+          message,
+          conversation: chat
+        });
+      }
+    }
+
+    emitConversationsToConnectedUsers();
+    await saveConversations();
+
+  } catch (error) {
+    console.error("Erro ao processar reação WAHA:", error);
+  }
+}
+
 app.use(
   "/media",
   express.static(MEDIA_DIR, {
@@ -2283,6 +2376,10 @@ app.post("/waha-webhook", async (req, res) => {
       await processarMensagemApagadaWaha(req.body);
     }
 
+    if (req.body?.event === "message.reaction") {
+      await processarReacaoWaha(req.body);
+    }
+
     return res.json({
       sucesso: true,
       recebido: true
@@ -2370,7 +2467,7 @@ if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessag
 
   await saveConversations();
 } else if (!isSystemMessage) {
-    return res.status(403).json({
+    return res.status(409).json({
       sucesso: false,
       erro: "Assuma a conversa antes de enviar mensagens."
     });
@@ -2696,7 +2793,7 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
     }
 
     if (!canSendInConversation(conversa)) {
-      return res.status(403).json({
+      return res.status(409).json({
         sucesso: false,
         erro: "Assuma a conversa antes de enviar anexos."
       });
