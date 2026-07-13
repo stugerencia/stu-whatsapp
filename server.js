@@ -989,7 +989,19 @@ async function saveMessage({
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
 
+  // Deduplicação: o WAHA às vezes entrega o mesmo evento "message" mais de uma vez
+  // (webhook duplicado). Se já existe uma mensagem com esse waMessageId nesta
+  // conversa, não salva de novo.
+  if (waMessageId) {
+    const existing = chat.messages.find(m => m.waMessageId === waMessageId);
+    if (existing) {
+      console.log("⚠️ saveMessage - mensagem duplicada ignorada:", { jid, waMessageId });
+      return existing;
+    }
+  }
+
   const senderRealPhone = findMappedPhone(sender);
+
   const now = new Date().toISOString();
 
   const newMessage = {
