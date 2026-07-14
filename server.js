@@ -1181,14 +1181,19 @@ async function processarMensagemWaha(body) {
   if (event !== "message.any") return;
   if (!payload) return;
 
-  // Log estrutural (sem conteúdo de mensagem) para confirmar que o payload de
-  // message.any segue o mesmo formato do antigo evento "message" — ainda não
-  // testamos esse evento nesta engine.
+  // Log estrutural (sem conteúdo de mensagem) — precisamos entender por que
+  // message.any dispara duas vezes para uma mensagem enviada, com "from"
+  // diferente em cada disparo (uma vez o contato certo, outra vez a própria
+  // identidade da conta conectada).
   console.log("📨 estrutura do payload de message.any:", {
-    chavesDoPayload: Object.keys(payload),
+    id: payload.id || null,
+    from: payload.from || null,
     fromMe: payload.fromMe ?? null,
-    hasFrom: !!payload.from,
-    hasDataKey: !!payload._data?.key,
+    source: payload.source || null,
+    dataKeyFields: payload._data?.key ? Object.keys(payload._data.key) : null,
+    dataKeyRemoteJid: payload._data?.key?.remoteJid || null,
+    dataKeyParticipant: payload._data?.key?.participant || null,
+    dataKeyFromMe: payload._data?.key?.fromMe ?? null,
     hasMedia: payload.hasMedia ?? null
   });
 
