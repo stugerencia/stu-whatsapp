@@ -1180,7 +1180,6 @@ async function processarMensagemWaha(body) {
 
   if (event !== "message") return;
   if (!payload) return;
-  if (payload.fromMe) return;
 
   const rawJid = payload.from || payload._data?.key?.remoteJid;
   const altJid = payload._data?.key?.remoteJidAlt;
@@ -1190,33 +1189,45 @@ async function processarMensagemWaha(body) {
   if (payload._data?.broadcast === true) return;
 
   const isGroup = rawJid.endsWith("@g.us");
+  // Mensagem enviada pela própria conta, mas fora do app (direto do celular do
+  // atendente). Antes essas mensagens eram descartadas (if payload.fromMe return);
+  // agora processamos e salvamos como "sent", confiando na deduplicação do
+  // saveMessage() para não duplicar as que já foram salvas via /enviar.
+  const enviadaForaDoApp = payload.fromMe === true;
 
   let jid = toInternalPhoneJid(rawJid);
   let sender = jid;
-  let senderName = payload._data?.pushName || payload.pushName || jid;
+  let senderName = enviadaForaDoApp
+    ? "Atendente (via celular)"
+    : (payload._data?.pushName || payload.pushName || jid);
   let displayName = senderName;
 
   if (isGroup) {
     jid = rawJid;
 
-    sender =
-      payload.participant ||
-      payload._data?.key?.participant ||
-      rawJid;
+    if (enviadaForaDoApp) {
+      sender = "sistema";
+      senderName = "Atendente (via celular)";
+    } else {
+      sender =
+        payload.participant ||
+        payload._data?.key?.participant ||
+        rawJid;
 
-    const participantAlt =
-      payload._data?.key?.participantAlt ||
-      null;
+      const participantAlt =
+        payload._data?.key?.participantAlt ||
+        null;
 
-    if (participantAlt && isPhoneJid(participantAlt)) {
-      await mapLidToPhone(sender, participantAlt);
-      sender = toInternalPhoneJid(participantAlt);
+      if (participantAlt && isPhoneJid(participantAlt)) {
+        await mapLidToPhone(sender, participantAlt);
+        sender = toInternalPhoneJid(participantAlt);
+      }
+
+      senderName =
+        payload._data?.pushName ||
+        payload.pushName ||
+        sender;
     }
-
-    senderName =
-      payload._data?.pushName ||
-      payload.pushName ||
-      sender;
 
     displayName = await getGroupName(rawJid);
   } else if (altJid && isPhoneJid(altJid)) {
@@ -1224,7 +1235,9 @@ async function processarMensagemWaha(body) {
 
     const telefone = normalizePhone(cleanJid(altJid));
     jid = `${telefone}@s.whatsapp.net`;
-    sender = jid;
+    sender = enviadaForaDoApp ? "sistema" : jid;
+  } else if (enviadaForaDoApp) {
+    sender = "sistema";
   }
 
   const text =
@@ -1244,30 +1257,32 @@ async function processarMensagemWaha(body) {
     fileSize: null
   };
 
- if (mediaType !== "none") {
-  mediaInfo = await downloadWahaMedia(payload);
-}
+  if (mediaType !== "none") {
+    mediaInfo = await downloadWahaMedia(payload);
+  }
 
-const conversaRecebida = await getOrCreateConversation(jid, isGroup, displayName);
+  const conversaRecebida = await getOrCreateConversation(jid, isGroup, displayName);
 
-if (!isGroup && conversaRecebida.status === "finalizada") {
-  conversaRecebida.status = "nova";
-  conversaRecebida.attendant = null;
-  conversaRecebida.finishedAt = null;
-  conversaRecebida.finishedBy = null;
+  if (!isGroup && conversaRecebida.status === "finalizada") {
+    conversaRecebida.status = "nova";
+    conversaRecebida.attendant = null;
+    conversaRecebida.finishedAt = null;
+    conversaRecebida.finishedBy = null;
 
-  addConversationHistory(conversaRecebida, "reabriu", "Sistema", {
-    motivo: "Nova mensagem recebida."
-  });
-}
+    addConversationHistory(conversaRecebida, "reabriu", "Sistema", {
+      motivo: enviadaForaDoApp
+        ? "Mensagem enviada pelo atendente fora do app."
+        : "Nova mensagem recebida."
+    });
+  }
 
-await saveMessage({
+  await saveMessage({
     jid,
     sender,
     senderName,
     displayName,
     text,
-    direction: "received",
+    direction: enviadaForaDoApp ? "sent" : "received",
     waMessageId: payload.id || payload._data?.key?.id,
     mediaType,
     mediaUrl: mediaInfo.mediaUrl,
@@ -1277,10 +1292,11 @@ await saveMessage({
   });
 
   console.log("✅ Mensagem salva:", {
-  tipo: isGroup ? "grupo" : "cliente",
-  nome: displayName,
-  midia: mediaType
-});
+    tipo: isGroup ? "grupo" : "cliente",
+    origem: enviadaForaDoApp ? "atendente_fora_do_app" : "cliente",
+    nome: displayName,
+    midia: mediaType
+  });
 }
   
 async function processarMensagemApagadaWaha(body) {
