@@ -1178,8 +1178,19 @@ async function processarMensagemWaha(body) {
   const event = body.event;
   const payload = body.payload || {};
 
-  if (event !== "message") return;
+  if (event !== "message.any") return;
   if (!payload) return;
+
+  // Log estrutural (sem conteúdo de mensagem) para confirmar que o payload de
+  // message.any segue o mesmo formato do antigo evento "message" — ainda não
+  // testamos esse evento nesta engine.
+  console.log("📨 estrutura do payload de message.any:", {
+    chavesDoPayload: Object.keys(payload),
+    fromMe: payload.fromMe ?? null,
+    hasFrom: !!payload.from,
+    hasDataKey: !!payload._data?.key,
+    hasMedia: payload.hasMedia ?? null
+  });
 
   const rawJid = payload.from || payload._data?.key?.remoteJid;
   const altJid = payload._data?.key?.remoteJidAlt;
@@ -2384,7 +2395,7 @@ app.post("/waha-webhook", async (req, res) => {
   type: req.body?.payload?.media?.mimetype || "text"
 });
 
-    if (req.body?.event === "message") {
+    if (req.body?.event === "message.any") {
   await processarMensagemWaha(req.body);
 }
 
