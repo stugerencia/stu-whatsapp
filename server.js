@@ -72,9 +72,16 @@ async function startWahaSessionWithStore() {
 
     const data = await response.json().catch(() => ({}));
 
+    if (data?.me) {
+      waSelfId = data.me.id ? cleanJid(data.me.id) : null;
+      waSelfLid = data.me.lid ? cleanJid(data.me.lid) : null;
+      waSelfPushName = data.me.pushName || null;
+    }
+
     console.log("✅ WAHA STORE START:", {
       ok: response.ok,
       status: response.status,
+      waSelf: { waSelfId, waSelfLid, waSelfPushName },
       data
     });
   } catch (error) {
@@ -84,6 +91,14 @@ async function startWahaSessionWithStore() {
 
 let connectionStatus = "WAHA MODE ATIVO";
 let lastQr = null;
+
+// Identidade da própria conta conectada ao WhatsApp (capturada no startup).
+// Usada para detectar e ignorar "ecos" espúrios de mensagens enviadas, onde o
+// WAHA dispara message.any referenciando a própria conta como se fosse uma
+// conversa nova (bug observado nesta engine NOWEB).
+let waSelfId = null;
+let waSelfLid = null;
+let waSelfPushName = null;
 
 let clientConversations = [];
 let groupConversations = [];
@@ -984,7 +999,8 @@ async function saveMessage({
   mimeType = null,
   fileSize = null,
   system = false,
-  forwarded = false
+  forwarded = false,
+  sentOutsideApp = false
 }) {
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
@@ -1001,7 +1017,6 @@ async function saveMessage({
   }
 
   const senderRealPhone = findMappedPhone(sender);
-
   const now = new Date().toISOString();
 
   const newMessage = {
@@ -1023,10 +1038,10 @@ async function saveMessage({
     fileSize,
     system,
     forwarded,
+    sentOutsideApp,
     deletedInWhatsApp: false,
     preservedInSystem: true
   };
-
   chat.messages.push(newMessage);
   await saveConversations();
 
@@ -1204,46 +1219,67 @@ async function processarMensagemWaha(body) {
   if (rawJid === "status@broadcast") return;
   if (payload._data?.broadcast === true) return;
 
+  // Eco espúrio: às vezes o WAHA dispara message.any referenciando a própria
+  // conta conectada como se fosse uma conversa nova, criando uma "conversa
+  // fantasma" de atendente falando consigo mesmo. Checamos 3 pistas possíveis.
+  const rawJidLimpo = cleanJid(rawJid);
+  const ehEcoDaPropriaConta =
+    payload.fromMe === true &&
+    (
+      (waSelfId && rawJidLimpo === waSelfId) ||
+      (waSelfLid && rawJidLimpo === waSelfLid) ||
+      (waSelfPushName && payload._data?.pushName === waSelfPushName)
+    );
+
+  if (ehEcoDaPropriaConta) {
+    console.log("🔁 message.any ignorado - eco da própria conta:", {
+      rawJid,
+      rawJidLimpo,
+      waSelfId,
+      waSelfLid,
+      pushNameRecebido: payload._data?.pushName || null,
+      waSelfPushName
+    });
+    return;
+  }
+
   const isGroup = rawJid.endsWith("@g.us");
-  // Mensagem enviada pela própria conta, mas fora do app (direto do celular do
-  // atendente). Antes essas mensagens eram descartadas (if payload.fromMe return);
-  // agora processamos e salvamos como "sent", confiando na deduplicação do
-  // saveMessage() para não duplicar as que já foram salvas via /enviar.
   const enviadaForaDoApp = payload.fromMe === true;
 
   let jid = toInternalPhoneJid(rawJid);
   let sender = jid;
-  let senderName = enviadaForaDoApp
-    ? "Atendente (via celular)"
-    : (payload._data?.pushName || payload.pushName || jid);
+  let senderName = payload._data?.pushName || payload.pushName || jid;
   let displayName = senderName;
 
-  if (isGroup) {
+  if (enviadaForaDoApp) {
+    // Mensagem enviada pelo atendente fora do app (direto do celular).
+    // Não usamos pushName aqui: numa mensagem enviada por nós mesmos, esse
+    // campo tende a refletir o nosso próprio nome, não o do contato/grupo —
+    // por isso não alteramos o nome já salvo da conversa (displayName null).
+    sender = "sistema";
+    senderName = "STU Atendimento";
+    displayName = null;
+  } else if (isGroup) {
     jid = rawJid;
 
-    if (enviadaForaDoApp) {
-      sender = "sistema";
-      senderName = "Atendente (via celular)";
-    } else {
-      sender =
-        payload.participant ||
-        payload._data?.key?.participant ||
-        rawJid;
+    sender =
+      payload.participant ||
+      payload._data?.key?.participant ||
+      rawJid;
 
-      const participantAlt =
-        payload._data?.key?.participantAlt ||
-        null;
+    const participantAlt =
+      payload._data?.key?.participantAlt ||
+      null;
 
-      if (participantAlt && isPhoneJid(participantAlt)) {
-        await mapLidToPhone(sender, participantAlt);
-        sender = toInternalPhoneJid(participantAlt);
-      }
-
-      senderName =
-        payload._data?.pushName ||
-        payload.pushName ||
-        sender;
+    if (participantAlt && isPhoneJid(participantAlt)) {
+      await mapLidToPhone(sender, participantAlt);
+      sender = toInternalPhoneJid(participantAlt);
     }
+
+    senderName =
+      payload._data?.pushName ||
+      payload.pushName ||
+      sender;
 
     displayName = await getGroupName(rawJid);
   } else if (altJid && isPhoneJid(altJid)) {
@@ -1251,9 +1287,7 @@ async function processarMensagemWaha(body) {
 
     const telefone = normalizePhone(cleanJid(altJid));
     jid = `${telefone}@s.whatsapp.net`;
-    sender = enviadaForaDoApp ? "sistema" : jid;
-  } else if (enviadaForaDoApp) {
-    sender = "sistema";
+    sender = jid;
   }
 
   const text =
@@ -1304,7 +1338,8 @@ async function processarMensagemWaha(body) {
     mediaUrl: mediaInfo.mediaUrl,
     mediaName: mediaInfo.mediaName,
     mimeType: mediaInfo.mimeType,
-    fileSize: mediaInfo.fileSize
+    fileSize: mediaInfo.fileSize,
+    sentOutsideApp: enviadaForaDoApp
   });
 
   console.log("✅ Mensagem salva:", {
