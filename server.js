@@ -1207,6 +1207,7 @@ async function processarMensagemWaha(body) {
     source: payload.source || null,
     dataKeyFields: payload._data?.key ? Object.keys(payload._data.key) : null,
     dataKeyRemoteJid: payload._data?.key?.remoteJid || null,
+    dataKeyRemoteJidAlt: payload._data?.key?.remoteJidAlt || null,
     dataKeyParticipant: payload._data?.key?.participant || null,
     dataKeyFromMe: payload._data?.key?.fromMe ?? null,
     hasMedia: payload.hasMedia ?? null
@@ -1219,26 +1220,22 @@ async function processarMensagemWaha(body) {
   if (rawJid === "status@broadcast") return;
   if (payload._data?.broadcast === true) return;
 
-  // Eco espúrio: às vezes o WAHA dispara message.any referenciando a própria
-  // conta conectada como se fosse uma conversa nova, criando uma "conversa
-  // fantasma" de atendente falando consigo mesmo. Checamos 3 pistas possíveis.
+  // Chat consigo mesmo (recurso "Mensagens para você" do WhatsApp): só conta
+  // se o próprio CHAT (não o remetente) for a nossa identidade. Removemos a
+  // checagem por pushName — esse campo é sempre quem ENVIOU a mensagem, então
+  // numa mensagem fromMe:true ele sempre é o nosso próprio nome, mesmo em
+  // mensagens legítimas para outros contatos. Nunca foi um sinal válido.
   const rawJidLimpo = cleanJid(rawJid);
-  const ehEcoDaPropriaConta =
+  const ehChatComigoMesmo =
     payload.fromMe === true &&
-    (
-      (waSelfId && rawJidLimpo === waSelfId) ||
-      (waSelfLid && rawJidLimpo === waSelfLid) ||
-      (waSelfPushName && payload._data?.pushName === waSelfPushName)
-    );
+    ((waSelfId && rawJidLimpo === waSelfId) || (waSelfLid && rawJidLimpo === waSelfLid));
 
-  if (ehEcoDaPropriaConta) {
-    console.log("🔁 message.any ignorado - eco da própria conta:", {
+  if (ehChatComigoMesmo) {
+    console.log("🔁 message.any ignorado - chat consigo mesmo:", {
       rawJid,
       rawJidLimpo,
       waSelfId,
-      waSelfLid,
-      pushNameRecebido: payload._data?.pushName || null,
-      waSelfPushName
+      waSelfLid
     });
     return;
   }
@@ -1251,43 +1248,52 @@ async function processarMensagemWaha(body) {
   let senderName = payload._data?.pushName || payload.pushName || jid;
   let displayName = senderName;
 
-  if (enviadaForaDoApp) {
-    // Mensagem enviada pelo atendente fora do app (direto do celular).
-    // Não usamos pushName aqui: numa mensagem enviada por nós mesmos, esse
-    // campo tende a refletir o nosso próprio nome, não o do contato/grupo —
-    // por isso não alteramos o nome já salvo da conversa (displayName null).
-    sender = "sistema";
-    senderName = "STU Atendimento";
-    displayName = null;
-  } else if (isGroup) {
+  if (isGroup) {
     jid = rawJid;
 
-    sender =
-      payload.participant ||
-      payload._data?.key?.participant ||
-      rawJid;
+    if (enviadaForaDoApp) {
+      sender = "sistema";
+      senderName = "STU Atendimento";
+    } else {
+      sender =
+        payload.participant ||
+        payload._data?.key?.participant ||
+        rawJid;
 
-    const participantAlt =
-      payload._data?.key?.participantAlt ||
-      null;
+      const participantAlt =
+        payload._data?.key?.participantAlt ||
+        null;
 
-    if (participantAlt && isPhoneJid(participantAlt)) {
-      await mapLidToPhone(sender, participantAlt);
-      sender = toInternalPhoneJid(participantAlt);
+      if (participantAlt && isPhoneJid(participantAlt)) {
+        await mapLidToPhone(sender, participantAlt);
+        sender = toInternalPhoneJid(participantAlt);
+      }
+
+      senderName =
+        payload._data?.pushName ||
+        payload.pushName ||
+        sender;
     }
 
-    senderName =
-      payload._data?.pushName ||
-      payload.pushName ||
-      sender;
-
     displayName = await getGroupName(rawJid);
-  } else if (altJid && isPhoneJid(altJid)) {
-    await mapLidToPhone(rawJid, altJid);
+  } else {
+    // Conversa individual: resolve LID -> telefone independente de quem
+    // enviou. Isso é essencial para mensagens fora do app, que também chegam
+    // endereçadas por LID e precisam cair na MESMA conversa já existente,
+    // em vez de criar uma conversa nova (era a causa da "conversa fantasma").
+    if (altJid && isPhoneJid(altJid)) {
+      await mapLidToPhone(rawJid, altJid);
+      const telefone = normalizePhone(cleanJid(altJid));
+      jid = `${telefone}@s.whatsapp.net`;
+    }
 
-    const telefone = normalizePhone(cleanJid(altJid));
-    jid = `${telefone}@s.whatsapp.net`;
-    sender = jid;
+    if (enviadaForaDoApp) {
+      sender = "sistema";
+      senderName = "STU Atendimento";
+      displayName = null;
+    } else {
+      sender = jid;
+    }
   }
 
   const text =
