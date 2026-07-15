@@ -1494,6 +1494,100 @@ async function processarReacaoWaha(body) {
   }
 }
 
+async function processarMensagemEditadaWaha(body) {
+  try {
+    const payload = body.payload || {};
+
+    // Log estrutural (sem conteúdo de mensagem, nem o antigo nem o novo texto)
+    // para descobrir o formato real desta engine — mesmo cuidado usado com
+    // message.revoked e message.reaction.
+    console.log("✏️ estrutura do payload de message.edited:", {
+      chavesDoPayload: Object.keys(payload),
+      editedMessageId: payload.editedMessageId || null,
+      temBefore: !!payload.before,
+      temAfter: !!payload.after,
+      beforeId: payload.before?.id || null,
+      afterId: payload.after?.id || null,
+      payloadId: payload.id || null,
+      chatId: payload.chatId || null,
+      from: payload.from || null,
+      dataKeys: payload._data ? Object.keys(payload._data) : null
+    });
+
+    const rawJid =
+      payload.from ||
+      payload.chatId ||
+      payload._data?.key?.remoteJid;
+
+    const editedId =
+      payload.editedMessageId ||
+      payload.before?.id ||
+      payload.after?.id ||
+      payload.id ||
+      payload.messageId ||
+      payload._data?.key?.id;
+
+    const newText =
+      payload.after?.body ??
+      payload.body ??
+      payload._data?.message?.conversation ??
+      payload._data?.message?.extendedTextMessage?.text ??
+      null;
+
+    if (!rawJid || !editedId) {
+      console.log("⚠️ message.edited ignorado - jid ou id ausente:", { rawJid, editedId });
+      return;
+    }
+
+    const chat = findConversationByJid(rawJid);
+
+    if (!chat) {
+      console.log("⚠️ message.edited - conversa não encontrada:", { rawJid });
+      return;
+    }
+
+    const rawTargetId = extractRawMessageId(editedId);
+    const message = chat.messages.find(m => extractRawMessageId(m.waMessageId) === rawTargetId);
+
+    if (!message) {
+      console.log("⚠️ message.edited - mensagem não encontrada:", { editedId, rawTargetId });
+      return;
+    }
+
+    if (newText !== null) {
+      message.text = newText;
+    }
+    message.edited = true;
+    message.editedAt = new Date().toISOString();
+
+    for (const [socketId, socket] of io.sockets.sockets) {
+      const userName = socket.data?.userName;
+      const role = socket.data?.role || "atendente";
+
+      const conversasPermitidas = userName
+        ? getConversationListByUser(userName, role)
+        : getConversationList();
+
+      const podeVerConversa = conversasPermitidas.some(c => c.jid === chat.jid);
+
+      if (podeVerConversa) {
+        socket.emit("mensagemEditada", {
+          jid: chat.jid,
+          waMessageId: message.waMessageId,
+          message,
+          conversation: chat
+        });
+      }
+    }
+
+    emitConversationsToConnectedUsers();
+    await saveConversations();
+
+  } catch (error) {
+    console.error("Erro ao processar mensagem editada WAHA:", error);
+  }
+}
+
 app.use(
   "/media",
   express.static(MEDIA_DIR, {
@@ -2451,6 +2545,10 @@ app.post("/waha-webhook", async (req, res) => {
 
     if (req.body?.event === "message.reaction") {
       await processarReacaoWaha(req.body);
+    }
+
+    if (req.body?.event === "message.edited") {
+      await processarMensagemEditadaWaha(req.body);
     }
 
     return res.json({
