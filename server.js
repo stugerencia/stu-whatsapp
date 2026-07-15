@@ -3060,6 +3060,87 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
   }
 });
 
+app.post("/editar-mensagem", authenticateToken, async (req, res) => {
+  try {
+    const { jid, waMessageId, novoTexto } = req.body;
+
+    if (!jid || !waMessageId || !novoTexto) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid, waMessageId e novoTexto"
+      });
+    }
+
+    const conversa = findConversationByJid(jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const chatId = toWahaChatId(conversa.jid);
+    const encodedChatId = encodeURIComponent(chatId);
+    const encodedMessageId = encodeURIComponent(waMessageId);
+
+    const response = await fetch(
+      `${WAHA_URL}/api/${WAHA_SESSION}/chats/${encodedChatId}/messages/${encodedMessageId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: novoTexto,
+          linkPreview: false,
+          linkPreviewHighQuality: false
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao editar mensagem pelo WAHA",
+        detalhe: data
+      });
+    }
+
+    const message = conversa.messages.find(
+      m => extractRawMessageId(m.waMessageId) === extractRawMessageId(waMessageId)
+    );
+
+    if (message) {
+      message.text = novoTexto;
+      message.edited = true;
+      message.editedAt = new Date().toISOString();
+    }
+
+    addConversationHistory(conversa, "editou_mensagem", req.user?.name || "Sistema", {
+      waMessageId
+    });
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid: conversa.jid,
+      waMessageId,
+      novoTexto
+    });
+
+  } catch (error) {
+    console.error("Erro ao editar mensagem:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao editar mensagem",
+      detalhe: error.message
+    });
+  }
+});
+
 app.post("/apagar-mensagem", authenticateToken, async (req, res) => {
   try {
     const { jid, waMessageId } = req.body;
