@@ -2596,10 +2596,15 @@ const internalJid = toInternalPhoneJid(jid);
 let conversa = findConversationByJid(internalJid);
 
 if (!conversa) {
+  // Busca o nome salvo do contato na agenda do WhatsApp antes de criar a
+  // conversa, para não precisar esperar a primeira resposta dele. Só se
+  // aplica a contatos individuais (grupos já resolvem o nome por getGroupName).
+  const nomeContato = !isGroupJid(internalJid) ? await getContactName(internalJid) : null;
+
   conversa = await getOrCreateConversation(
     internalJid,
     isGroupJid(internalJid),
-    cleanJid(internalJid)
+    nomeContato || cleanJid(internalJid)
   );
 
   conversa.status = "em_atendimento";
