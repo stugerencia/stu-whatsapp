@@ -884,6 +884,41 @@ async function getGroupName(jid) {
   }
 }
 
+async function getContactName(jid) {
+  try {
+    const chatId = toWahaChatId(jid);
+
+    const endpoints = [
+      `${WAHA_URL}/api/${WAHA_SESSION}/contacts/${encodeURIComponent(chatId)}`,
+      `${WAHA_URL}/api/contacts?contactId=${encodeURIComponent(chatId)}&session=${WAHA_SESSION}`
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) continue;
+
+        const data = await response.json();
+
+        const name =
+          data.name ||
+          data.pushname ||
+          data.pushName ||
+          data.formattedName ||
+          data.shortName ||
+          null;
+
+        if (name) return name;
+      } catch {}
+    }
+
+    return null;
+  } catch (error) {
+    console.log("Erro ao buscar nome do contato no WAHA:", error.message);
+    return null;
+  }
+}
+
 async function getOrCreateConversation(jid, isGroup, displayName = null) {
   if (isGroup) {
     let groupChat = groupConversations.find(c => c.jid === jid);
