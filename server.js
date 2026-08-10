@@ -1365,6 +1365,10 @@ async function processarMensagemWaha(body) {
   const contextInfo =
     payload._data?.message?.extendedTextMessage?.contextInfo || null;
 
+  // LOG TEMPORÁRIO — remover assim que confirmarmos o formato real.
+  if (text) {
+    console.log("🔍 DIAGNÓSTICO CITAÇÃO - payload completo do texto:", JSON.stringify(payload, null, 2));
+  }
   const mediaType = detectarTipoMidia(payload);
   let mediaInfo = {
     mediaUrl: null,
