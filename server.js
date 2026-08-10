@@ -1619,12 +1619,21 @@ async function processarMensagemEditadaWaha(body) {
       return;
     }
 
+    // Idempotência: se a edição já foi atribuída a um atendente (feita pelo
+    // app via /editar-mensagem), não sobrescreve com um aviso genérico
+    // vindo do eco desse mesmo evento pelo webhook.
+    if (!message.editedByAttendant) {
+      message.editedNotice =
+        message.direction === "received"
+          ? "editada pelo cliente"
+          : "editada no WhatsApp";
+    }
+
     if (newText !== null) {
       message.text = newText;
     }
     message.edited = true;
     message.editedAt = new Date().toISOString();
-
     for (const [socketId, socket] of io.sockets.sockets) {
       const userName = socket.data?.userName;
       const role = socket.data?.role || "atendente";
@@ -3184,13 +3193,17 @@ app.post("/editar-mensagem", authenticateToken, async (req, res) => {
       m => extractRawMessageId(m.waMessageId) === extractRawMessageId(waMessageId)
     );
 
+    const atendenteResponsavel = req.user?.name || "Sistema";
+
     if (message) {
       message.text = novoTexto;
       message.edited = true;
       message.editedAt = new Date().toISOString();
+      message.editedByAttendant = atendenteResponsavel;
+      message.editedNotice = `editada pelo atendente ${atendenteResponsavel}`;
     }
 
-    addConversationHistory(conversa, "editou_mensagem", req.user?.name || "Sistema", {
+    addConversationHistory(conversa, "editou_mensagem", atendenteResponsavel, {
       waMessageId
     });
 
