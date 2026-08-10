@@ -111,6 +111,7 @@ let users = [];
 let lidToPhone = {};
 let phoneToLid = {};
 let groupNameCache = {};
+let canonicalChatIdCache = {};
 let saveConversationsRunning = false;
 let saveConversationsPending = false;
 
@@ -933,6 +934,36 @@ async function getContactName(jid) {
     console.log("Erro ao buscar nome do contato no WAHA:", error.message);
     return null;
   }
+}
+
+// Números brasileiros cadastrados antes de 2012 usam o formato antigo (sem o
+// nono dígito). Se enviarmos no formato errado, a WAHA aceita o envio
+// (retorna 201) mas o WhatsApp nunca entrega de verdade, sem erro nenhum.
+// Consulta o chatId real reconhecido pelo WhatsApp antes de enviar.
+async function getCanonicalChatId(chatId) {
+  if (!chatId || !chatId.endsWith("@c.us")) return chatId;
+  if (canonicalChatIdCache[chatId]) return canonicalChatIdCache[chatId];
+
+  try {
+    const phone = normalizePhone(cleanJid(chatId));
+    const response = await fetch(
+      `${WAHA_URL}/api/contacts/check-exists?phone=${phone}&session=${WAHA_SESSION}`
+    );
+
+    if (!response.ok) return chatId;
+
+    const data = await response.json().catch(() => null);
+
+    if (data?.numberExists && data?.chatId) {
+      canonicalChatIdCache[chatId] = data.chatId;
+      console.log("📞 chatId corrigido pelo check-exists:", { original: chatId, canonico: data.chatId });
+      return data.chatId;
+    }
+  } catch (error) {
+    console.log("Erro ao verificar chatId canônico:", error.message);
+  }
+
+  return chatId;
 }
 
 async function getOrCreateConversation(jid, isGroup, displayName = null) {
@@ -2724,9 +2755,13 @@ if (conversa.status === "finalizada" && isReopenMessage && !isFinalizationMessag
   }
 }
 
-const chatId = quotedMessage?.waMessageId?.includes("_")
+let chatId = quotedMessage?.waMessageId?.includes("_")
   ? quotedMessage.waMessageId.split("_")[1]
   : toWahaChatId(conversa.jid);
+
+if (!isGroupJid(chatId)) {
+  chatId = await getCanonicalChatId(chatId);
+}
 
 console.log("ENVIANDO PARA WAHA:", {
   session: WAHA_SESSION,
