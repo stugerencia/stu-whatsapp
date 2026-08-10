@@ -2937,7 +2937,11 @@ if (conversaDestino) {
         continue;
       }
 
-      const chatId = toWahaChatId(conversaDestino.jid);
+      let chatId = toWahaChatId(conversaDestino.jid);
+
+      if (!isGroupJid(chatId)) {
+        chatId = await getCanonicalChatId(chatId);
+      }
 
       const response = await fetch(`${WAHA_URL}/api/forwardMessage`, {
         method: "POST",
@@ -3087,7 +3091,12 @@ app.post("/enviar-midia", authenticateToken, async (req, res) => {
       });
     }
 
-    const chatId = toWahaChatId(conversa.jid);
+    let chatId = toWahaChatId(conversa.jid);
+
+    if (!isGroupJid(chatId)) {
+      chatId = await getCanonicalChatId(chatId);
+    }
+
     const finalMimeType = mimeType || "application/octet-stream";
     const finalFileName =
       fileName || `${Date.now()}.${getExtensionFromMime(finalMimeType)}`;
