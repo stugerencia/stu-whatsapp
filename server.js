@@ -896,9 +896,23 @@ async function getContactName(jid) {
     for (const url of endpoints) {
       try {
         const response = await fetch(url);
+
+        console.log("📇 getContactName - tentativa:", {
+          url,
+          status: response.status,
+          ok: response.ok
+        });
+
         if (!response.ok) continue;
 
         const data = await response.json();
+
+        console.log("📇 getContactName - resposta:", {
+          chavesDaResposta: Object.keys(data || {}),
+          name: data.name || null,
+          pushname: data.pushname || null,
+          pushName: data.pushName || null
+        });
 
         const name =
           data.name ||
@@ -909,7 +923,9 @@ async function getContactName(jid) {
           null;
 
         if (name) return name;
-      } catch {}
+      } catch (e) {
+        console.log("📇 getContactName - erro na tentativa:", { url, erro: e.message });
+      }
     }
 
     return null;
