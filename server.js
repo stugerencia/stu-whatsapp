@@ -1051,7 +1051,8 @@ async function saveMessage({
   fileSize = null,
   system = false,
   forwarded = false,
-  sentOutsideApp = false
+  sentOutsideApp = false,
+  contextInfo = null
 }) {
   const isGroup = isGroupJid(jid);
   const chat = await getOrCreateConversation(jid, isGroup, displayName);
@@ -1090,6 +1091,7 @@ async function saveMessage({
     system,
     forwarded,
     sentOutsideApp,
+    contextInfo,
     deletedInWhatsApp: false,
     preservedInSystem: true
   };
@@ -1356,6 +1358,13 @@ async function processarMensagemWaha(body) {
     payload._data?.message?.documentMessage?.caption ||
     "";
 
+  // Dado de citação ("resposta a"): a engine NOWEB (protocolo Baileys)
+  // entrega isso dentro de extendedTextMessage.contextInfo. O
+  // MessageBubble.jsx do frontend já espera esse formato em
+  // message.contextInfo?.quotedMessage?.conversation.
+  const contextInfo =
+    payload._data?.message?.extendedTextMessage?.contextInfo || null;
+
   const mediaType = detectarTipoMidia(payload);
   let mediaInfo = {
     mediaUrl: null,
@@ -1396,7 +1405,8 @@ async function processarMensagemWaha(body) {
     mediaName: mediaInfo.mediaName,
     mimeType: mediaInfo.mimeType,
     fileSize: mediaInfo.fileSize,
-    sentOutsideApp: enviadaForaDoApp
+    sentOutsideApp: enviadaForaDoApp,
+    contextInfo
   });
 
   console.log("✅ Mensagem salva:", {
