@@ -3257,7 +3257,7 @@ app.post("/apagar-mensagem", authenticateToken, async (req, res) => {
     await saveConversations();
     emitConversationsToConnectedUsers();
 
-    return res.json({
+   return res.json({
       sucesso: true,
       jid: conversa.jid,
       waMessageId,
@@ -3269,6 +3269,102 @@ app.post("/apagar-mensagem", authenticateToken, async (req, res) => {
     return res.status(500).json({
       sucesso: false,
       erro: "Erro ao apagar mensagem",
+      detalhe: error.message
+    });
+  }
+});
+
+app.post("/reagir-mensagem", authenticateToken, async (req, res) => {
+  try {
+    const { jid, waMessageId, emoji } = req.body;
+
+    if (!jid || !waMessageId) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid e waMessageId"
+      });
+    }
+
+    const conversa = findConversationByJid(jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const response = await fetch(`${WAHA_URL}/api/reaction`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: WAHA_SESSION,
+        messageId: waMessageId,
+        reaction: emoji || ""
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao reagir pelo WAHA",
+        detalhe: data
+      });
+    }
+
+    const message = conversa.messages.find(
+      m => extractRawMessageId(m.waMessageId) === extractRawMessageId(waMessageId)
+    );
+
+    if (message) {
+      message.reaction = emoji
+        ? { emoji, by: "atendente", updatedAt: new Date().toISOString() }
+        : null;
+    }
+
+    addConversationHistory(conversa, "reagiu_mensagem", req.user?.name || "Sistema", {
+      waMessageId,
+      emoji: emoji || null
+    });
+
+    await saveConversations();
+
+    for (const [socketId, socket] of io.sockets.sockets) {
+      const userName = socket.data?.userName;
+      const role = socket.data?.role || "atendente";
+
+      const conversasPermitidas = userName
+        ? getConversationListByUser(userName, role)
+        : getConversationList();
+
+      const podeVerConversa = conversasPermitidas.some(c => c.jid === conversa.jid);
+
+      if (podeVerConversa) {
+        socket.emit("mensagemReagida", {
+          jid: conversa.jid,
+          waMessageId,
+          message,
+          conversation: conversa
+        });
+      }
+    }
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid: conversa.jid,
+      waMessageId,
+      emoji: emoji || null
+    });
+
+  } catch (error) {
+    console.error("Erro ao reagir mensagem:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao reagir mensagem",
       detalhe: error.message
     });
   }
