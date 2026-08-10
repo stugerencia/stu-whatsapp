@@ -2761,7 +2761,10 @@ reply_to: quotedMessage?.waMessageId || undefined
       senderName: "STU Atendimento",
       text: mensagem,
       direction: "sent",
-      waMessageId: buildWahaMessageId(chatId, data)
+      waMessageId: buildWahaMessageId(chatId, data),
+      contextInfo: quotedMessage
+        ? { quotedMessage: { conversation: quotedMessage.text || "" } }
+        : null
     });
 
   res.json({
