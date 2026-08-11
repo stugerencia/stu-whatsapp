@@ -1437,7 +1437,16 @@ async function processarMensagemWaha(body) {
 
   const conversaRecebida = await getOrCreateConversation(jid, isGroup, displayName);
 
-  if (!isGroup && conversaRecebida.status === "finalizada") {
+  // Só reabre a conversa em sinais genuínos de novo contato: mensagem do
+  // cliente, ou mensagem enviada pelo atendente DIRETO do celular pareado
+  // (payload.source === "app"). O eco de mensagens que o nosso próprio
+  // backend já enviou pela API (rotas /enviar, /enviar-midia,
+  // /encaminhar-mensagem, mensagens automáticas de assumir/finalizar —
+  // payload.source === "api") não deve reabrir nada: é só a confirmação do
+  // envio que já processamos, não uma mensagem nova de verdade.
+  const isEcoDaPropriaApi = payload.fromMe === true && payload.source === "api";
+
+  if (!isGroup && !isEcoDaPropriaApi && conversaRecebida.status === "finalizada") {
     conversaRecebida.status = "nova";
     conversaRecebida.attendant = null;
     conversaRecebida.finishedAt = null;
