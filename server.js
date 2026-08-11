@@ -2775,12 +2775,18 @@ app.post("/waha-webhook", async (req, res) => {
 
 app.post("/enviar-transcricao", authenticateToken, async (req, res) => {
   try {
-    const { to, subject, body } = req.body;
+    const { subject, body } = req.body;
 
-    if (!to || !subject || !body) {
+    // Destino fixo e não configurável pelo cliente: evita que um atendente
+    // desvie transcrições de conversas para um e-mail externo não
+    // autorizado. Mesmo que a chamada venha direto da API (fora do app),
+    // o destino nunca muda.
+    const to = "atendimento@samutransportes.com.br";
+
+    if (!subject || !body) {
       return res.status(400).json({
         sucesso: false,
-        erro: "Informe to, subject e body"
+        erro: "Informe subject e body"
       });
     }
 
