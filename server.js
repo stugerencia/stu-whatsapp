@@ -2775,7 +2775,7 @@ app.post("/waha-webhook", async (req, res) => {
 
 app.post("/enviar-transcricao", authenticateToken, async (req, res) => {
   try {
-    const { subject, body } = req.body;
+    const { subject, body, jid } = req.body;
 
     // Destino fixo e não configurável pelo cliente: evita que um atendente
     // desvie transcrições de conversas para um e-mail externo não
@@ -2797,6 +2797,47 @@ app.post("/enviar-transcricao", authenticateToken, async (req, res) => {
       });
     }
 
+    // Anexa as mídias da conversa (imagens, áudios, vídeos, documentos) que
+    // ainda estão salvas localmente em MEDIA_DIR, respeitando um limite de
+    // segurança de tamanho total (a API do Resend recusa e-mails grandes
+    // demais). Mídias que não couberem ficam de fora, com aviso no corpo.
+    const LIMITE_ANEXOS_BYTES = 35 * 1024 * 1024;
+    const attachments = [];
+    const omitidos = [];
+
+    if (jid) {
+      const conversa = findConversationByJid(jid);
+      if (conversa) {
+        let totalBytes = 0;
+        for (const m of conversa.messages) {
+          if (!m.mediaUrl) continue;
+          try {
+            const fileName = m.mediaUrl.replace("/media/", "");
+            const filePath = path.join(MEDIA_DIR, fileName);
+            const stat = await fs.stat(filePath);
+
+            if (totalBytes + stat.size > LIMITE_ANEXOS_BYTES) {
+              omitidos.push(m.mediaName || fileName);
+              continue;
+            }
+
+            const buffer = await fs.readFile(filePath);
+            attachments.push({
+              filename: m.mediaName || fileName,
+              content: buffer.toString("base64")
+            });
+            totalBytes += stat.size;
+          } catch {
+            // Arquivo não encontrado no disco (ex: mídia antiga já removida) — ignora.
+          }
+        }
+      }
+    }
+
+    const bodyComNota = omitidos.length > 0
+      ? `${body}\n\n[Aviso: ${omitidos.length} anexo(s) não incluído(s) por limite de tamanho: ${omitidos.join(", ")}]`
+      : body;
+
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -2807,7 +2848,8 @@ app.post("/enviar-transcricao", authenticateToken, async (req, res) => {
         from: "STU Atendimento <onboarding@resend.dev>",
         to: [to],
         subject,
-        text: body
+        text: bodyComNota,
+        ...(attachments.length > 0 ? { attachments } : {})
       })
     });
 
