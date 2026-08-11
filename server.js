@@ -76,7 +76,7 @@ async function startWahaSessionWithStore() {
       waSelfId = data.me.id ? cleanJid(data.me.id) : null;
       waSelfLid = data.me.lid ? cleanJid(data.me.lid) : null;
       waSelfPushName = data.me.pushName || null;
-      connectionStatus = "WORKING";
+      setConnectionStatus("WORKING");
     }
 
     console.log("✅ WAHA STORE START:", {
@@ -92,6 +92,28 @@ async function startWahaSessionWithStore() {
 
 let connectionStatus = "UNKNOWN";
 let lastQr = null;
+let connectedSince = null;
+let reconnectionTimestamps = [];
+
+// Centraliza a atualização do status: toda vez que a sessão TRANSICIONA para
+// "WORKING" (vindo de qualquer outro estado), registra o horário da conexão
+// e soma mais uma reconexão à janela das últimas 24h — usado pelos
+// indicadores "Conectado desde" e "Reconexões (24h)" no Dashboard.
+function setConnectionStatus(newStatus) {
+  const wasWorking = connectionStatus === "WORKING";
+  connectionStatus = newStatus;
+
+  if (newStatus === "WORKING" && !wasWorking) {
+    connectedSince = new Date().toISOString();
+    reconnectionTimestamps.push(Date.now());
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    reconnectionTimestamps = reconnectionTimestamps.filter(t => t > cutoff);
+  }
+
+  if (newStatus !== "WORKING") {
+    connectedSince = null;
+  }
+}
 
 // Identidade da própria conta conectada ao WhatsApp (capturada no startup).
 // Usada para detectar e ignorar "ecos" espúrios de mensagens enviadas, onde o
@@ -1722,9 +1744,14 @@ app.get("/download/:fileName", async (req, res) => {
 });
 
 app.get("/status", (req, res) => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const reconnectCount24h = reconnectionTimestamps.filter(t => t > cutoff).length;
+
   res.json({
     status: connectionStatus,
     whatsappConectado: connectionStatus === "WORKING",
+    connectedSince,
+    reconnectCount24h,
     modo: "WAHA",
     wahaUrl: WAHA_URL,
     session: WAHA_SESSION,
@@ -2714,7 +2741,7 @@ app.post("/waha-webhook", async (req, res) => {
     if (req.body?.event === "session.status") {
       const novoStatus = req.body?.payload?.status || null;
       if (novoStatus) {
-        connectionStatus = novoStatus;
+        setConnectionStatus(novoStatus);
         console.log("🔌 session.status atualizado:", novoStatus);
         for (const [socketId, socket] of io.sockets.sockets) {
           socket.emit("status", { status: connectionStatus });
@@ -3527,9 +3554,9 @@ app.post("/desconectar", authenticateToken, requireAdmin, async (req, res) => {
       });
     }
 
-    connectionStatus = "WAHA DESCONECTADO";
+    setConnectionStatus("WAHA DESCONECTADO");
     lastQr = null;
-
+    
     for (const [socketId, socket] of io.sockets.sockets) {
       socket.emit("status", { status: connectionStatus });
     }
