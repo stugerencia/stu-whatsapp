@@ -2025,6 +2025,60 @@ app.get("/conversas-usuario", authenticateToken, (req, res) => {
   });
 });
 
+app.get("/buscar", authenticateToken, (req, res) => {
+  try {
+    const termo = String(req.query.q || "").trim().toLowerCase();
+
+    if (!termo) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe o termo de busca"
+      });
+    }
+
+    const userName = req.user.name;
+    const role = req.user.role || "atendente";
+    const conversas = getConversationListByUser(userName, role);
+
+    const resultados = conversas
+      .map(conversa => {
+        const nome = (conversa.clientName || conversa.name || "").toLowerCase();
+        const nomeCasa = nome.includes(termo);
+
+        const mensagemEncontrada = [...conversa.messages]
+          .reverse()
+          .find(m => (m.text || "").toLowerCase().includes(termo));
+
+        if (!nomeCasa && !mensagemEncontrada) return null;
+
+        return {
+          jid: conversa.jid,
+          clientName: conversa.clientName || conversa.name || "",
+          status: conversa.status,
+          matchType: mensagemEncontrada ? "mensagem" : "nome",
+          trecho: mensagemEncontrada ? mensagemEncontrada.text : null,
+          data: mensagemEncontrada ? mensagemEncontrada.date : null
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.data || 0).getTime() - new Date(a.data || 0).getTime());
+
+    return res.json({
+      sucesso: true,
+      termo,
+      total: resultados.length,
+      resultados
+    });
+
+  } catch (error) {
+    console.error("Erro em /buscar:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/marcar-lida", authenticateToken, async (req, res) => {
   try {
     const { jid } = req.body;
