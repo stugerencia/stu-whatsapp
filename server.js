@@ -139,6 +139,142 @@ let canonicalChatIdCache = {};
 let saveConversationsRunning = false;
 let saveConversationsPending = false;
 
+// Pesquisa de satisfação
+const SATISFACTION_FILE = path.join(DATA_DIR, "satisfaction.json");
+let satisfactionSettings = {
+  enabled: false,
+  cooldownDays: 7,
+  messageText: "Como foi seu atendimento com a STU?"
+};
+let satisfactionSentMap = {};       // telefone -> ISO da última pesquisa enviada
+let satisfactionAwaiting = {};      // telefone -> { conversationJid, agentName, clientName, sentAt }
+let satisfactionResponses = [];     // respostas recebidas
+
+async function loadSatisfaction() {
+  try {
+    await ensureDirs();
+    const raw = await fs.readFile(SATISFACTION_FILE, "utf-8");
+    const data = JSON.parse(raw);
+    satisfactionSettings = { ...satisfactionSettings, ...(data.settings || {}) };
+    satisfactionSentMap = data.sentMap || {};
+    satisfactionAwaiting = data.awaiting || {};
+    satisfactionResponses = data.responses || [];
+    console.log("Pesquisa de satisfação carregada:", { respostas: satisfactionResponses.length });
+  } catch {
+    // primeira execução: mantém os valores padrão
+  }
+}
+
+async function saveSatisfaction() {
+  try {
+    await ensureDirs();
+    await fs.writeFile(
+      SATISFACTION_FILE,
+      JSON.stringify(
+        {
+          settings: satisfactionSettings,
+          sentMap: satisfactionSentMap,
+          awaiting: satisfactionAwaiting,
+          responses: satisfactionResponses
+        },
+        null,
+        2
+      )
+    );
+  } catch (error) {
+    console.error("Erro ao salvar pesquisa de satisfação:", error);
+  }
+}
+
+// Dispara a enquete de satisfação após uma conversa ser finalizada, respeitando
+// o cooldown configurado por contato (evita reenviar se o mesmo cliente
+// finalizar outro atendimento antes do prazo).
+async function dispararPesquisaSatisfacao(conversa, attendantName) {
+  try {
+    if (!satisfactionSettings.enabled) return;
+    if (isGroupJid(conversa.jid)) return;
+
+    const telefone = conversa.realPhone || conversa.telefone || cleanJid(conversa.jid);
+    if (!telefone) return;
+
+    const ultimoEnvio = satisfactionSentMap[telefone];
+    if (ultimoEnvio) {
+      const diasDesde = (Date.now() - new Date(ultimoEnvio).getTime()) / (1000 * 60 * 60 * 24);
+      if (diasDesde < satisfactionSettings.cooldownDays) {
+        console.log("⭐ Pesquisa de satisfação pulada (dentro do cooldown):", { telefone, diasDesde: diasDesde.toFixed(1) });
+        return;
+      }
+    }
+
+    const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
+
+    const response = await fetch(`${WAHA_URL}/api/sendPoll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: WAHA_SESSION,
+        chatId,
+        poll: {
+          name: satisfactionSettings.messageText,
+          options: ["⭐", "⭐⭐", "⭐⭐⭐", "⭐⭐⭐⭐", "⭐⭐⭐⭐⭐"],
+          multipleAnswers: false
+        }
+      })
+    });
+
+    if (!response.ok) {
+      console.log("⚠️ Falha ao enviar pesquisa de satisfação:", { telefone, status: response.status });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    satisfactionSentMap[telefone] = now;
+    satisfactionAwaiting[telefone] = {
+      conversationJid: conversa.jid,
+      agentName: attendantName || conversa.attendant || "Sistema",
+      clientName: conversa.clientName || conversa.name || telefone,
+      sentAt: now
+    };
+
+    await saveSatisfaction();
+    console.log("⭐ Pesquisa de satisfação enviada:", { telefone });
+
+  } catch (error) {
+    console.error("Erro ao disparar pesquisa de satisfação:", error);
+  }
+}
+
+// Chamada a partir do evento webhook poll.vote — captura o voto na pesquisa
+// de satisfação, se houver uma pendente para esse telefone.
+async function capturarVotoSatisfacao(telefone, selectedOptions) {
+  const pendente = satisfactionAwaiting[telefone];
+  if (!pendente) return;
+
+  const horasDesde = (Date.now() - new Date(pendente.sentAt).getTime()) / (1000 * 60 * 60);
+  if (horasDesde > 48) {
+    delete satisfactionAwaiting[telefone];
+    await saveSatisfaction();
+    return;
+  }
+
+  const opcao = (selectedOptions || [])[0] || "";
+  const score = (opcao.match(/⭐/g) || []).length;
+  if (score < 1 || score > 5) return;
+
+  satisfactionResponses.push({
+    telefone,
+    clientName: pendente.clientName,
+    agentName: pendente.agentName,
+    score,
+    comment: "",
+    date: new Date().toISOString()
+  });
+
+  delete satisfactionAwaiting[telefone];
+  await saveSatisfaction();
+  console.log("⭐ Voto de satisfação registrado:", { telefone, score });
+}
+
 function getConversationList() {
   return [...clientConversations, ...groupConversations].sort((a, b) => {
     const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
@@ -2259,6 +2395,8 @@ app.post("/finalizar-conversa", authenticateToken, async (req, res) => {
 
     await saveConversations();
 
+    dispararPesquisaSatisfacao(conversa, conversa.finishedBy);
+
    emitConversationsToConnectedUsers();
 
     return res.json({
@@ -2354,6 +2492,44 @@ app.post("/transferir-conversa", authenticateToken, async (req, res) => {
 
 app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
+});
+
+app.get("/pesquisa-config", authenticateToken, (req, res) => {
+  res.json({
+    sucesso: true,
+    config: satisfactionSettings
+  });
+});
+
+app.post("/pesquisa-config", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { enabled, cooldownDays, messageText } = req.body;
+
+    if (typeof enabled === "boolean") satisfactionSettings.enabled = enabled;
+    if (Number.isFinite(Number(cooldownDays)) && Number(cooldownDays) > 0) {
+      satisfactionSettings.cooldownDays = Number(cooldownDays);
+    }
+    if (typeof messageText === "string" && messageText.trim()) {
+      satisfactionSettings.messageText = messageText.trim();
+    }
+
+    await saveSatisfaction();
+
+    return res.json({
+      sucesso: true,
+      config: satisfactionSettings
+    });
+  } catch (error) {
+    console.error("Erro ao salvar configuração de pesquisa:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
+app.get("/pesquisas", authenticateToken, (req, res) => {
+  res.json(satisfactionResponses);
 });
 
 app.get("/mensagens-rapidas", (req, res) => {
@@ -2746,6 +2922,14 @@ app.post("/waha-webhook", async (req, res) => {
 
   if (req.body?.event === "message.edited") {
       await processarMensagemEditadaWaha(req.body);
+    }
+
+    if (req.body?.event === "poll.vote") {
+      const vote = req.body?.payload?.vote || {};
+      if (vote.from && !vote.fromMe) {
+        const telefone = normalizePhone(cleanJid(vote.from));
+        await capturarVotoSatisfacao(telefone, vote.selectedOptions);
+      }
     }
 
     if (req.body?.event === "session.status") {
@@ -3848,6 +4032,7 @@ server.listen(PORT, async () => {
   await loadQuickMessages();
   await loadUsers();
   await ensureDefaultUsers();
+  await loadSatisfaction();
   await startWahaSessionWithStore();
   await sincronizarFotosChatsOverview();
 
