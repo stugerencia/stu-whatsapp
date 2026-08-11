@@ -2706,14 +2706,26 @@ app.post("/waha-webhook", async (req, res) => {
       await processarReacaoWaha(req.body);
     }
 
-    if (req.body?.event === "message.edited") {
+  if (req.body?.event === "message.edited") {
       await processarMensagemEditadaWaha(req.body);
+    }
+
+    if (req.body?.event === "session.status") {
+      const novoStatus = req.body?.payload?.status || null;
+      if (novoStatus) {
+        connectionStatus = novoStatus;
+        console.log("🔌 session.status atualizado:", novoStatus);
+        for (const [socketId, socket] of io.sockets.sockets) {
+          socket.emit("status", { status: connectionStatus });
+        }
+      }
     }
 
     return res.json({
       sucesso: true,
       recebido: true
     });
+    
   } catch (error) {
     console.error("Erro no /waha-webhook:", error);
     return res.status(500).json({
@@ -3498,11 +3510,89 @@ app.post("/reagir-mensagem", authenticateToken, async (req, res) => {
   }
 });
 
-app.post("/desconectar", async (req, res) => {
-  res.json({
-    sucesso: false,
-    mensagem: "Este serviço está em modo WAHA. A desconexão deve ser feita no serviço WAHA."
-  });
+app.post("/desconectar", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const response = await fetch(`${WAHA_URL}/api/sessions/${WAHA_SESSION}/logout`, {
+      method: "POST"
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao desconectar pelo WAHA",
+        detalhe: data
+      });
+    }
+
+    connectionStatus = "WAHA DESCONECTADO";
+    lastQr = null;
+
+    for (const [socketId, socket] of io.sockets.sockets) {
+      socket.emit("status", { status: connectionStatus });
+    }
+
+    return res.json({
+      sucesso: true,
+      mensagem: "Sessão desconectada. Use /reconectar para gerar um novo QR code."
+    });
+
+  } catch (error) {
+    console.error("Erro ao desconectar sessão:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao desconectar sessão",
+      detalhe: error.message
+    });
+  }
+});
+
+app.post("/reconectar", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await startWahaSessionWithStore();
+
+    return res.json({
+      sucesso: true,
+      mensagem: "Sessão reiniciada. Consulte /qr-atual para obter o QR code."
+    });
+
+  } catch (error) {
+    console.error("Erro ao reconectar sessão:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao reconectar sessão",
+      detalhe: error.message
+    });
+  }
+});
+
+app.get("/qr-atual", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const response = await fetch(`${WAHA_URL}/api/${WAHA_SESSION}/auth/qr`);
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        sucesso: false,
+        erro: "QR code não disponível no momento (sessão pode já estar conectada ou não ter sido iniciada)"
+      });
+    }
+
+    const contentType = response.headers.get("content-type") || "image/png";
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.set("Content-Type", contentType);
+    return res.send(buffer);
+
+  } catch (error) {
+    console.error("Erro ao buscar QR code:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao buscar QR code",
+      detalhe: error.message
+    });
+  }
 });
 
 app.get("/", (req, res) => {
