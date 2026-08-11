@@ -208,17 +208,19 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
 
     const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
 
-    const response = await fetch(`${WAHA_URL}/api/sendPoll`, {
+    // Enquetes (sendPoll) não funcionam de forma confiável nessa conta —
+    // a engine falha silenciosamente ao decodificar votos em contatos com
+    // endereçamento @lid (bug conhecido da biblioteca por trás da engine
+    // NOWEB). Voltamos ao texto simples, com proteção por janela de tempo
+    // e telefone específico contra falsos positivos.
+    const response = await fetch(`${WAHA_URL}/api/sendText`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session: WAHA_SESSION,
         chatId,
-        poll: {
-          name: satisfactionSettings.messageText,
-          options: ["⭐", "⭐⭐", "⭐⭐⭐", "⭐⭐⭐⭐", "⭐⭐⭐⭐⭐"],
-          multipleAnswers: false
-        }
+        text: `${satisfactionSettings.messageText}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`,
+        linkPreview: false
       })
     });
 
@@ -244,35 +246,39 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
   }
 }
 
-// Chamada a partir do evento webhook poll.vote — captura o voto na pesquisa
-// de satisfação, se houver uma pendente para esse telefone.
-async function capturarVotoSatisfacao(telefone, selectedOptions) {
+// Verifica se uma mensagem recebida é a resposta a uma pesquisa de satisfação
+// pendente (aguardando resposta há no máximo 48h) e, se for, registra a nota.
+// Só considera resposta se: (1) o telefone tem pesquisa pendente registrada,
+// (2) está dentro da janela de 48h após o envio, (3) o texto começa com um
+// dígito de 1 a 5. Fora dessas condições, qualquer número digitado pelo
+// cliente é tratado como mensagem normal.
+async function capturarRespostaSatisfacao(telefone, texto) {
   const pendente = satisfactionAwaiting[telefone];
-  if (!pendente) return;
+  if (!pendente) return false;
 
   const horasDesde = (Date.now() - new Date(pendente.sentAt).getTime()) / (1000 * 60 * 60);
   if (horasDesde > 48) {
     delete satisfactionAwaiting[telefone];
     await saveSatisfaction();
-    return;
+    return false;
   }
 
-  const opcao = (selectedOptions || [])[0] || "";
-  const score = (opcao.match(/⭐/g) || []).length;
-  if (score < 1 || score > 5) return;
+  const match = String(texto || "").trim().match(/^([1-5])\b\s*(.*)$/s);
+  if (!match) return false;
 
   satisfactionResponses.push({
     telefone,
     clientName: pendente.clientName,
     agentName: pendente.agentName,
-    score,
-    comment: "",
+    score: Number(match[1]),
+    comment: match[2] || "",
     date: new Date().toISOString()
   });
 
   delete satisfactionAwaiting[telefone];
   await saveSatisfaction();
-  console.log("⭐ Voto de satisfação registrado:", { telefone, score });
+  console.log("⭐ Resposta de satisfação registrada:", { telefone, score: match[1] });
+  return true;
 }
 
 function getConversationList() {
@@ -1574,16 +1580,27 @@ async function processarMensagemWaha(body) {
 
   const conversaRecebida = await getOrCreateConversation(jid, isGroup, displayName);
 
+  // Antes de decidir se reabre a conversa: verifica se essa mensagem é a
+  // resposta do cliente a uma pesquisa de satisfação pendente. Se for, ela
+  // é capturada e NÃO deve reabrir a conversa nem contar como "nova
+  // mensagem" nos indicadores — é só feedback, não um novo atendimento.
+  let foiRespostaSatisfacao = false;
+  if (!isGroup && !enviadaForaDoApp) {
+    const telefoneResposta = findMappedPhone(jid) || cleanJid(jid);
+    foiRespostaSatisfacao = await capturarRespostaSatisfacao(telefoneResposta, text);
+  }
+
   // Só reabre a conversa em sinais genuínos de novo contato: mensagem do
   // cliente, ou mensagem enviada pelo atendente DIRETO do celular pareado
   // (payload.source === "app"). O eco de mensagens que o nosso próprio
   // backend já enviou pela API (rotas /enviar, /enviar-midia,
   // /encaminhar-mensagem, mensagens automáticas de assumir/finalizar —
   // payload.source === "api") não deve reabrir nada: é só a confirmação do
-  // envio que já processamos, não uma mensagem nova de verdade.
+  // envio que já processamos, não uma mensagem nova de verdade. Uma resposta
+  // de pesquisa de satisfação também não reabre.
   const isEcoDaPropriaApi = payload.fromMe === true && payload.source === "api";
 
-  if (!isGroup && !isEcoDaPropriaApi && conversaRecebida.status === "finalizada") {
+  if (!isGroup && !isEcoDaPropriaApi && !foiRespostaSatisfacao && conversaRecebida.status === "finalizada") {
     conversaRecebida.status = "nova";
     conversaRecebida.attendant = null;
     conversaRecebida.finishedAt = null;
@@ -2922,14 +2939,6 @@ app.post("/waha-webhook", async (req, res) => {
 
   if (req.body?.event === "message.edited") {
       await processarMensagemEditadaWaha(req.body);
-    }
-
-    if (req.body?.event === "poll.vote") {
-      const vote = req.body?.payload?.vote || {};
-      if (vote.from && !vote.fromMe) {
-        const telefone = normalizePhone(cleanJid(vote.from));
-        await capturarVotoSatisfacao(telefone, vote.selectedOptions);
-      }
     }
 
     if (req.body?.event === "session.status") {
