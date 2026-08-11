@@ -76,6 +76,7 @@ async function startWahaSessionWithStore() {
       waSelfId = data.me.id ? cleanJid(data.me.id) : null;
       waSelfLid = data.me.lid ? cleanJid(data.me.lid) : null;
       waSelfPushName = data.me.pushName || null;
+      connectionStatus = "WORKING";
     }
 
     console.log("✅ WAHA STORE START:", {
@@ -89,7 +90,7 @@ async function startWahaSessionWithStore() {
   }
 }
 
-let connectionStatus = "WAHA MODE ATIVO";
+let connectionStatus = "UNKNOWN";
 let lastQr = null;
 
 // Identidade da própria conta conectada ao WhatsApp (capturada no startup).
@@ -1723,7 +1724,7 @@ app.get("/download/:fileName", async (req, res) => {
 app.get("/status", (req, res) => {
   res.json({
     status: connectionStatus,
-    whatsappConectado: true,
+    whatsappConectado: connectionStatus === "WORKING",
     modo: "WAHA",
     wahaUrl: WAHA_URL,
     session: WAHA_SESSION,
