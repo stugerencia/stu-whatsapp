@@ -48,6 +48,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "12h";
 const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
 const WAHA_SESSION = process.env.WAHA_SESSION || "default";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 
 async function startWahaSessionWithStore() {
   try {
@@ -2768,6 +2769,63 @@ app.post("/waha-webhook", async (req, res) => {
     return res.status(500).json({
       sucesso: false,
       erro: error.message
+    });
+  }
+});
+
+app.post("/enviar-transcricao", authenticateToken, async (req, res) => {
+  try {
+    const { to, subject, body } = req.body;
+
+    if (!to || !subject || !body) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe to, subject e body"
+      });
+    }
+
+    if (!RESEND_API_KEY) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Envio de e-mail não configurado no servidor (RESEND_API_KEY ausente)"
+      });
+    }
+
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: "STU Atendimento <onboarding@resend.dev>",
+        to: [to],
+        subject,
+        text: body
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: "Erro ao enviar e-mail pelo Resend",
+        detalhe: data
+      });
+    }
+
+    return res.json({
+      sucesso: true,
+      id: data.id || null
+    });
+
+  } catch (error) {
+    console.error("Erro ao enviar transcrição:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: "Erro ao enviar transcrição",
+      detalhe: error.message
     });
   }
 });
