@@ -2412,10 +2412,16 @@ app.post("/finalizar-conversa", authenticateToken, async (req, res) => {
 
     await saveConversations();
 
-    dispararPesquisaSatisfacao(conversa, conversa.finishedBy);
+    // Espera alguns segundos antes de disparar a pesquisa — dá tempo da
+    // mensagem automática de finalização (enviada pelo frontend logo após
+    // esta resposta) chegar primeiro no WhatsApp, mantendo a ordem natural
+    // da conversa: "finalizado" antes de "avalie seu atendimento".
+    setTimeout(() => {
+      dispararPesquisaSatisfacao(conversa, conversa.finishedBy);
+    }, 5000);
 
    emitConversationsToConnectedUsers();
-
+    
     return res.json({
       sucesso: true,
       jid,
