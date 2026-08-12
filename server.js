@@ -563,7 +563,6 @@ async function saveConversations() {
       )
     );
 
-    console.log("💾 Conversas salvas");
 
   } catch (error) {
     console.error("Erro ao salvar conversas:", error);
@@ -1064,22 +1063,9 @@ async function getContactName(jid) {
       try {
         const response = await fetch(url);
 
-        console.log("📇 getContactName - tentativa:", {
-          url,
-          status: response.status,
-          ok: response.ok
-        });
-
         if (!response.ok) continue;
 
         const data = await response.json();
-
-        console.log("📇 getContactName - resposta:", {
-          chavesDaResposta: Object.keys(data || {}),
-          name: data.name || null,
-          pushname: data.pushname || null,
-          pushName: data.pushName || null
-        });
 
         const name =
           data.name ||
@@ -1446,23 +1432,6 @@ async function processarMensagemWaha(body) {
   if (event !== "message.any") return;
   if (!payload) return;
 
-  // Log estrutural (sem conteúdo de mensagem) — precisamos entender por que
-  // message.any dispara duas vezes para uma mensagem enviada, com "from"
-  // diferente em cada disparo (uma vez o contato certo, outra vez a própria
-  // identidade da conta conectada).
-  console.log("📨 estrutura do payload de message.any:", {
-    id: payload.id || null,
-    from: payload.from || null,
-    fromMe: payload.fromMe ?? null,
-    source: payload.source || null,
-    dataKeyFields: payload._data?.key ? Object.keys(payload._data.key) : null,
-    dataKeyRemoteJid: payload._data?.key?.remoteJid || null,
-    dataKeyRemoteJidAlt: payload._data?.key?.remoteJidAlt || null,
-    dataKeyParticipant: payload._data?.key?.participant || null,
-    dataKeyFromMe: payload._data?.key?.fromMe ?? null,
-    hasMedia: payload.hasMedia ?? null
-  });
-
   const rawJid = payload.from || payload._data?.key?.remoteJid;
   const altJid = payload._data?.key?.remoteJidAlt;
 
@@ -1562,10 +1531,6 @@ async function processarMensagemWaha(body) {
   const contextInfo =
     payload._data?.message?.extendedTextMessage?.contextInfo || null;
 
-  // LOG TEMPORÁRIO — remover assim que confirmarmos o formato real.
-  if (text) {
-    console.log("🔍 DIAGNÓSTICO CITAÇÃO - payload completo do texto:", JSON.stringify(payload, null, 2));
-  }
   const mediaType = detectarTipoMidia(payload);
   let mediaInfo = {
     mediaUrl: null,
@@ -1642,22 +1607,6 @@ async function processarMensagemApagadaWaha(body) {
   try {
     const payload = body.payload || {};
 
-    // Log estrutural (sem conteúdo de mensagem) só para confirmar quais campos
-    // existem neste payload — nunca loga "body"/texto, para não expor
-    // o conteúdo de mensagens apagadas nos logs do Railway.
-    console.log("🗑️ estrutura do payload de message.revoked:", {
-      chavesDoPayload: Object.keys(payload),
-      revokedMessageId: payload.revokedMessageId || null,
-      temBefore: !!payload.before,
-      temAfter: !!payload.after,
-      beforeId: payload.before?.id || null,
-      afterId: payload.after?.id || null,
-      payloadId: payload.id || null,
-      chatId: payload.chatId || null,
-      from: payload.from || null,
-      dataKeys: payload._data ? Object.keys(payload._data) : null
-    });
-
     const rawJid =
       payload.from ||
       payload.chatId ||
@@ -1686,20 +1635,6 @@ async function processarMensagemApagadaWaha(body) {
 async function processarReacaoWaha(body) {
   try {
     const payload = body.payload || {};
-
-    // Log estrutural (sem conteúdo de mensagem) para confirmar os nomes reais
-    // dos campos nesta engine — a documentação genérica da WAHA é pro WEBJS,
-    // e a NOWEB já nos surpreendeu antes com nomes diferentes (revokedMessageId).
-    console.log("👍 estrutura do payload de message.reaction:", {
-      chavesDoPayload: Object.keys(payload),
-      temReaction: !!payload.reaction,
-      reactionKeys: payload.reaction ? Object.keys(payload.reaction) : null,
-      reactionText: payload.reaction?.text ?? null,
-      reactionMessageId: payload.reaction?.messageId || payload.reaction?.reactedMessageId || null,
-      from: payload.from || null,
-      chatId: payload.chatId || null,
-      fromMe: payload.fromMe ?? null
-    });
 
     const rawJid =
       payload.from ||
@@ -1779,22 +1714,6 @@ async function processarReacaoWaha(body) {
 async function processarMensagemEditadaWaha(body) {
   try {
     const payload = body.payload || {};
-
-    // Log estrutural (sem conteúdo de mensagem, nem o antigo nem o novo texto)
-    // para descobrir o formato real desta engine — mesmo cuidado usado com
-    // message.revoked e message.reaction.
-    console.log("✏️ estrutura do payload de message.edited:", {
-      chavesDoPayload: Object.keys(payload),
-      editedMessageId: payload.editedMessageId || null,
-      temBefore: !!payload.before,
-      temAfter: !!payload.after,
-      beforeId: payload.before?.id || null,
-      afterId: payload.after?.id || null,
-      payloadId: payload.id || null,
-      chatId: payload.chatId || null,
-      from: payload.from || null,
-      dataKeys: payload._data ? Object.keys(payload._data) : null
-    });
 
     const rawJid =
       payload.from ||
@@ -3269,28 +3188,20 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
       });
     }
 
-    const texto =
+      const texto =
       message.text ||
       message.body ||
       "";
 
-    const mediaType =
+      const mediaType =
       message.mediaType && message.mediaType !== "none"
         ? message.mediaType
         : "none";
 
-    const resultados = [];
-
-console.log("========== INÍCIO ENCAMINHAMENTO ==========");
-console.log("Destinos:", destinations);
-console.log("Mensagem:", {
-    id: message.id,
-    waMessageId: message.waMessageId,
-    mediaType: message.mediaType,
-    text: message.text
-});
+      const resultados = [];
 
     for (const destino of destinations) {
+      
       const jidDestino =
         typeof destino === "string"
           ? destino
@@ -3307,17 +3218,6 @@ console.log("Mensagem:", {
       }
 
       const conversaDestino = findConversationByJid(jidDestino);
-      
-  console.log("Conversa encontrada:", !!conversaDestino);
-
-if (conversaDestino) {
-    console.log({
-        jid: conversaDestino.jid,
-        status: conversaDestino.status,
-        attendant: conversaDestino.attendant,
-        isGroup: isGroupJid(conversaDestino.jid)
-    });
-}
 
       if (!conversaDestino) {
         resultados.push({
@@ -3329,12 +3229,6 @@ if (conversaDestino) {
         continue;
       }
 
-      console.log(
-    "Pode enviar:",
-    conversaDestino
-        ? canSendInConversation(conversaDestino)
-        : false
-);
       if (!canSendInConversation(conversaDestino)) {
         resultados.push({
           destino: conversaDestino.jid,
@@ -3363,13 +3257,8 @@ if (conversaDestino) {
         })
       });
 
-      console.log("HTTP WAHA:", response.status);
-      
       const data = await response.json().catch(() => ({}));
 
-      console.log("Resposta WAHA:");
-      console.dir(data, { depth: null });
-      
       if (!response.ok) {
         resultados.push({
           destino: conversaDestino.jid,
@@ -3449,9 +3338,6 @@ if (conversaDestino) {
 
     await saveConversations();
 emitConversationsToConnectedUsers();
-
-console.log("========== RESULTADO FINAL ==========");
-console.dir(resultados, { depth: null });
 
 return res.json({
     sucesso: falhas.length === 0,
