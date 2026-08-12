@@ -601,8 +601,6 @@ async function saveTags() {
       JSON.stringify(tags, null, 2)
     );
 
-    console.log("Etiquetas salvas");
-
   } catch (error) {
     console.error("Erro ao salvar etiquetas:", error);
   }
@@ -633,8 +631,6 @@ async function saveQuickMessages() {
       JSON.stringify(quickMessages, null, 2)
     );
 
-    console.log("Mensagens rápidas salvas");
-
   } catch (error) {
     console.error("Erro ao salvar mensagens rápidas:", error);
   }
@@ -664,8 +660,6 @@ async function saveUsers() {
       USERS_FILE,
       JSON.stringify(users, null, 2)
     );
-
-    console.log("Usuários salvos");
 
   } catch (error) {
     console.error("Erro ao salvar usuários:", error);
@@ -1244,10 +1238,9 @@ async function saveMessage({
   // (webhook duplicado). Se já existe uma mensagem com esse waMessageId nesta
   // conversa, não salva de novo.
   if (waMessageId) {
-    const existing = chat.messages.find(m => m.waMessageId === waMessageId);
+   const existing = chat.messages.find(m => m.waMessageId === waMessageId);
     if (existing) {
-      console.log("⚠️ saveMessage - mensagem duplicada ignorada:", { jid, waMessageId });
-      return existing;
+   return existing;
     }
   }
 
@@ -1595,12 +1588,7 @@ async function processarMensagemWaha(body) {
     contextInfo
   });
 
-  console.log("✅ Mensagem salva:", {
-    tipo: isGroup ? "grupo" : "cliente",
-    origem: enviadaForaDoApp ? "atendente_fora_do_app" : "cliente",
-    nome: displayName,
-    midia: mediaType
-  });
+  console.log(`✅ Mensagem salva: ${isGroup ? "grupo" : "cliente"} / ${enviadaForaDoApp ? "atendente_fora_do_app" : "cliente"}${mediaType !== "none" ? ` / ${mediaType}` : ""}`);
 }
   
 async function processarMensagemApagadaWaha(body) {
@@ -2842,13 +2830,8 @@ app.post("/waha-webhook", async (req, res) => {
         ignorado: "status_broadcast"
       });
     }
-    console.log("📩 WAHA:", {
-  event: req.body?.event,
-  from: req.body?.payload?.from,
-  name: req.body?.payload?._data?.pushName,
-  hasMedia: req.body?.payload?.hasMedia,
-  type: req.body?.payload?.media?.mimetype || "text"
-});
+
+    console.log(`📩 WAHA: ${req.body?.event} de ${req.body?.payload?.from || "?"}`);
 
     if (req.body?.event === "message.any") {
   await processarMensagemWaha(req.body);
@@ -3090,13 +3073,7 @@ if (!isGroupJid(chatId)) {
   chatId = await getCanonicalChatId(chatId);
 }
 
-console.log("ENVIANDO PARA WAHA:", {
-  session: WAHA_SESSION,
-  chatId,
-  mensagem,
-  quotedMessage,
-reply_to: quotedMessage?.waMessageId || undefined
-});    
+console.log(`ENVIANDO PARA WAHA: chatId=${chatId}${quotedMessage ? " (com citação)" : ""}`);   
     
     const response = await fetch(`${WAHA_URL}/api/sendText`, {
       method: "POST",
@@ -3113,11 +3090,7 @@ reply_to: quotedMessage?.waMessageId || undefined
 });
 
     const data = await response.json().catch(() => ({}));
-  console.log("RESPOSTA WAHA SENDTEXT:", {
-  ok: response.ok,
-  status: response.status,
-  data
-});
+  console.log(`RESPOSTA WAHA SENDTEXT: status=${response.status}`);
 
     if (!response.ok) {
       return res.status(500).json({
