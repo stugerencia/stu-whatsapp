@@ -51,10 +51,15 @@ const WAHA_SESSION = process.env.WAHA_SESSION || "default";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 
+// Depois de quantos dias local a mídia já confirmada no backup do Drive
+// pode ser removida do volume do Railway, para poupar espaço em disco.
+const RETENCAO_MIDIA_LOCAL_DIAS = 180; // ~6 meses
+
 // Controle de backups mensais
 const BACKUP_STATE_FILE = path.join(DATA_DIR, "backup_state.json");
 let backupState = {
-  mesesSalvos: [] // ["2026-01", "2026-02", ...]
+  mesesSalvos: [],        // meses com o texto (JSON) já confirmado no Drive
+  mesesMidiaCompleta: []  // meses cuja mídia foi 100% confirmada no Drive, sem falhas
 };
 
 async function loadBackupState() {
@@ -99,7 +104,12 @@ function calcularMesesPendentes() {
 
   while (cursor <= limite) {
     const chave = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    if (!backupState.mesesSalvos.includes(chave)) {
+    // Reprocessa o mês se o texto ainda não foi confirmado OU se a mídia
+    // ainda não foi 100% confirmada (ex: alguma mídia falhou/foi ignorada
+    // na tentativa anterior e precisa ser retentada).
+    const textoOk = backupState.mesesSalvos.includes(chave);
+    const midiaOk = backupState.mesesMidiaCompleta.includes(chave);
+    if (!textoOk || !midiaOk) {
       pendentes.push(chave);
     }
     cursor.setMonth(cursor.getMonth() + 1);
@@ -2535,6 +2545,39 @@ app.get("/backup/dump/:mes", requireBackupSecret, (req, res) => {
   res.json({ sucesso: true, dump });
 });
 
+// Lista os arquivos de mídia (imagens, áudios, documentos, vídeos) referenciados
+// por mensagens de um mês específico, para o backup incluir também a mídia,
+// não só o texto. O download em si usa a rota pública /download/:fileName
+// já existente — aqui só devolvemos quais arquivos pertencem a esse mês.
+app.get("/backup/midias/:mes", requireBackupSecret, (req, res) => {
+  const mesChave = req.params.mes;
+  if (!/^\d{4}-\d{2}$/.test(mesChave)) {
+    return res.status(400).json({ sucesso: false, erro: "Formato de mês inválido, use AAAA-MM" });
+  }
+
+  const [ano, mes] = mesChave.split("-").map(Number);
+  const inicio = new Date(ano, mes - 1, 1).getTime();
+  const fim = new Date(ano, mes, 1).getTime();
+
+  const arquivos = [];
+
+  for (const conversa of [...clientConversations, ...groupConversations]) {
+    for (const m of (conversa.messages || [])) {
+      if (!m.mediaUrl) continue;
+      const t = new Date(m.date || m.sentAt || 0).getTime();
+      if (t < inicio || t >= fim) continue;
+
+      arquivos.push({
+        fileName: m.mediaUrl.replace("/media/", ""),
+        mediaName: m.mediaName || m.mediaUrl.replace("/media/", ""),
+        mimeType: m.mimeType || "application/octet-stream"
+      });
+    }
+  }
+
+  res.json({ sucesso: true, arquivos });
+});
+
 app.post("/backup/confirmar/:mes", requireBackupSecret, async (req, res) => {
   const mesChave = req.params.mes;
   if (!backupState.mesesSalvos.includes(mesChave)) {
@@ -2544,6 +2587,66 @@ app.post("/backup/confirmar/:mes", requireBackupSecret, async (req, res) => {
   }
   res.json({ sucesso: true, mesesSalvos: backupState.mesesSalvos });
 });
+
+// Chamada pela função de backup do Base44 depois de processar a mídia de um
+// mês inteiro. completo=true só quando NENHUM arquivo daquele mês falhou ou
+// foi ignorado (por tamanho, erro de rede, etc) — só então esse mês fica
+// elegível para a limpeza automática do disco local, mais adiante.
+app.post("/backup/confirmar-midia/:mes", requireBackupSecret, async (req, res) => {
+  const mesChave = req.params.mes;
+  const completo = req.body?.completo === true;
+
+  if (completo && !backupState.mesesMidiaCompleta.includes(mesChave)) {
+    backupState.mesesMidiaCompleta.push(mesChave);
+    backupState.mesesMidiaCompleta.sort();
+    await saveBackupState();
+  }
+
+  res.json({ sucesso: true, mesesMidiaCompleta: backupState.mesesMidiaCompleta });
+});
+
+// Apaga do disco local os arquivos de mídia com mais de
+// RETENCAO_MIDIA_LOCAL_DIAS dias, cujo mês já está com backup de mídia
+// 100% confirmado no Drive. A mensagem em si NUNCA é apagada — só o
+// arquivo físico e a referência mediaUrl, marcando mediaArchived=true para
+// o frontend explicar que o anexo está preservado no backup, não perdido.
+async function limparMidiaLocalAntiga() {
+  if (backupState.mesesMidiaCompleta.length === 0) return;
+
+  const limite = Date.now() - RETENCAO_MIDIA_LOCAL_DIAS * 24 * 60 * 60 * 1000;
+  let alterouAlgo = false;
+  let removidos = 0;
+
+  for (const conversa of [...clientConversations, ...groupConversations]) {
+    for (const m of (conversa.messages || [])) {
+      if (!m.mediaUrl || m.mediaArchived) continue;
+
+      const t = new Date(m.date || m.sentAt || 0).getTime();
+      if (!t || t > limite) continue;
+
+      const chave = `${new Date(t).getFullYear()}-${String(new Date(t).getMonth() + 1).padStart(2, "0")}`;
+      if (!backupState.mesesMidiaCompleta.includes(chave)) continue;
+
+      try {
+        const fileName = m.mediaUrl.replace("/media/", "");
+        const filePath = path.join(MEDIA_DIR, fileName);
+        await fs.unlink(filePath);
+      } catch {
+        // Arquivo já não existe no disco — segue normalmente, só limpa a referência.
+      }
+
+      m.mediaUrl = null;
+      m.mediaArchived = true;
+      alterouAlgo = true;
+      removidos++;
+    }
+  }
+
+  if (alterouAlgo) {
+    await saveConversations();
+    console.log(`🗄️ Limpeza de mídia local: ${removidos} arquivo(s) removido(s) (já confirmados no backup do Drive)`);
+  }
+}
 
 app.get("/pesquisa-config", authenticateToken, (req, res) => {
   res.json({
@@ -4053,6 +4156,15 @@ server.listen(PORT, async () => {
 setInterval(() => {
   sincronizarFotosChatsOverview();
 }, 30 * 60 * 1000);
+
+// Roda a limpeza de mídia local uma vez por dia (com um atraso inicial de
+// 1 minuto após o boot, para não competir com a inicialização da sessão WAHA).
+setTimeout(() => {
+  limparMidiaLocalAntiga();
+  setInterval(() => {
+    limparMidiaLocalAntiga();
+  }, 24 * 60 * 60 * 1000);
+}, 60 * 1000);
   
   console.log("Servidor rodando na porta", PORT);
   console.log("WAHA MODE ATIVO - Baileys desativado");
