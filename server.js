@@ -55,6 +55,10 @@ const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 // pode ser removida do volume do Railway, para poupar espaço em disco.
 const RETENCAO_MIDIA_LOCAL_DIAS = 180; // ~6 meses
 
+// Mesmo limite usado no upload para o Drive — verificado aqui no backend,
+// antes de oferecer o arquivo, para nunca reoferecer um arquivo grande
+// demais em tentativas futuras.
+const TAMANHO_MAXIMO_MIDIA_BACKUP = 10 * 1024 * 1024; // 10 MB
 // Controle de backups mensais
 const BACKUP_STATE_FILE = path.join(DATA_DIR, "backup_state.json");
 let backupState = {
@@ -2557,7 +2561,7 @@ app.get("/backup/dump/:mes", requireBackupSecret, (req, res) => {
 // por mensagens de um mês específico, para o backup incluir também a mídia,
 // não só o texto. O download em si usa a rota pública /download/:fileName
 // já existente — aqui só devolvemos quais arquivos pertencem a esse mês.
-app.get("/backup/midias/:mes", requireBackupSecret, (req, res) => {
+app.get("/backup/midias/:mes", requireBackupSecret, async (req, res) => {
   const mesChave = req.params.mes;
   if (!/^\d{4}-\d{2}$/.test(mesChave)) {
     return res.status(400).json({ sucesso: false, erro: "Formato de mês inválido, use AAAA-MM" });
@@ -2568,20 +2572,51 @@ app.get("/backup/midias/:mes", requireBackupSecret, (req, res) => {
   const fim = new Date(ano, mes, 1).getTime();
 
   const arquivos = [];
+  let precisaSalvar = false;
 
   for (const conversa of [...clientConversations, ...groupConversations]) {
     for (const m of (conversa.messages || [])) {
       if (!m.mediaUrl) continue;
+      // Já processada numa rodada anterior (enviada com sucesso, ou
+      // permanentemente ignorada) — nunca reoferece para nova tentativa.
+      if (m.mediaBackupStatus) continue;
+
       const t = new Date(m.date || m.sentAt || 0).getTime();
       if (t < inicio || t >= fim) continue;
 
+      const fileName = m.mediaUrl.replace("/media/", "");
+      const filePath = path.join(MEDIA_DIR, fileName);
+
+      let tamanho = 0;
+      try {
+        const stat = await fs.stat(filePath);
+        tamanho = stat.size;
+      } catch {
+        // Arquivo não existe mais no disco — marca como ignorado permanente,
+        // não há o que fazer backup aqui.
+        m.mediaBackupStatus = "arquivo_nao_encontrado";
+        precisaSalvar = true;
+        continue;
+      }
+
+      // Verifica o tamanho AQUI, sem precisar baixar o arquivo inteiro só
+      // para descobrir que é grande demais — e nunca mais oferece esse
+      // arquivo específico de novo.
+      if (tamanho > TAMANHO_MAXIMO_MIDIA_BACKUP) {
+        m.mediaBackupStatus = "ignorado_tamanho";
+        precisaSalvar = true;
+        continue;
+      }
+
       arquivos.push({
-        fileName: m.mediaUrl.replace("/media/", ""),
-        mediaName: m.mediaName || m.mediaUrl.replace("/media/", ""),
+        fileName,
+        mediaName: m.mediaName || fileName,
         mimeType: m.mimeType || "application/octet-stream"
       });
     }
   }
+
+  if (precisaSalvar) await saveConversations();
 
   res.json({ sucesso: true, arquivos });
 });
@@ -2600,6 +2635,31 @@ app.post("/backup/confirmar/:mes", requireBackupSecret, async (req, res) => {
 // mês inteiro. completo=true só quando NENHUM arquivo daquele mês falhou ou
 // foi ignorado (por tamanho, erro de rede, etc) — só então esse mês fica
 // elegível para a limpeza automática do disco local, mais adiante.
+// Chamada pela função de backup depois de subir (ou confirmar que já
+// existia) um arquivo de mídia individual no Drive — marca a mensagem
+// correspondente como concluída, tanto para nunca mais reoferecer esse
+// arquivo quanto para liberar ele especificamente para a limpeza local.
+app.post("/backup/midia-confirmada", requireBackupSecret, async (req, res) => {
+  const { fileName } = req.body || {};
+  if (!fileName) {
+    return res.status(400).json({ sucesso: false, erro: "Informe fileName" });
+  }
+
+  let encontrado = false;
+  for (const conversa of [...clientConversations, ...groupConversations]) {
+    for (const m of (conversa.messages || [])) {
+      if (m.mediaUrl && m.mediaUrl.replace("/media/", "") === fileName) {
+        m.mediaBackupStatus = "ok";
+        encontrado = true;
+      }
+    }
+  }
+
+  if (encontrado) await saveConversations();
+
+  res.json({ sucesso: true, encontrado });
+});
+
 app.post("/backup/confirmar-midia/:mes", requireBackupSecret, async (req, res) => {
   const mesChave = req.params.mes;
   const completo = req.body?.completo === true;
@@ -2619,21 +2679,21 @@ app.post("/backup/confirmar-midia/:mes", requireBackupSecret, async (req, res) =
 // arquivo físico e a referência mediaUrl, marcando mediaArchived=true para
 // o frontend explicar que o anexo está preservado no backup, não perdido.
 async function limparMidiaLocalAntiga() {
-  if (backupState.mesesMidiaCompleta.length === 0) return;
-
   const limite = Date.now() - RETENCAO_MIDIA_LOCAL_DIAS * 24 * 60 * 60 * 1000;
   let alterouAlgo = false;
   let removidos = 0;
 
   for (const conversa of [...clientConversations, ...groupConversations]) {
     for (const m of (conversa.messages || [])) {
-      if (!m.mediaUrl || m.mediaArchived) continue;
+      if (!m.mediaUrl) continue;
+      // Só remove do disco o que foi CONFIRMADO individualmente como
+      // enviado com sucesso ao Drive — nunca apaga arquivos ignorados (por
+      // tamanho, por erro) ou ainda não processados, mesmo que o mês em
+      // geral já esteja marcado como "completo".
+      if (m.mediaBackupStatus !== "ok") continue;
 
       const t = new Date(m.date || m.sentAt || 0).getTime();
       if (!t || t > limite) continue;
-
-      const chave = `${new Date(t).getFullYear()}-${String(new Date(t).getMonth() + 1).padStart(2, "0")}`;
-      if (!backupState.mesesMidiaCompleta.includes(chave)) continue;
 
       try {
         const fileName = m.mediaUrl.replace("/media/", "");
