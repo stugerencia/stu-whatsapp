@@ -2621,6 +2621,45 @@ app.get("/backup/midias/:mes", requireBackupSecret, async (req, res) => {
   res.json({ sucesso: true, arquivos });
 });
 
+// Registro simples de cada execução do backup, para exibir status na tela
+// de Administração — mantém só as últimas 30 entradas, suficiente para
+// diagnóstico sem crescer indefinidamente.
+app.post("/backup/log-execucao", requireBackupSecret, async (req, res) => {
+  const { sucesso, mesProcessado, midiasIgnoradasCount, erro } = req.body || {};
+
+  backupState.ultimasExecucoes = backupState.ultimasExecucoes || [];
+  backupState.ultimasExecucoes.unshift({
+    data: new Date().toISOString(),
+    sucesso: sucesso !== false,
+    mesProcessado: mesProcessado || null,
+    midiasIgnoradasCount: midiasIgnoradasCount || 0,
+    erro: erro || null
+  });
+  backupState.ultimasExecucoes = backupState.ultimasExecucoes.slice(0, 30);
+
+  await saveBackupState();
+  res.json({ sucesso: true });
+});
+
+app.get("/backup/status", authenticateToken, (req, res) => {
+  const ultimasExecucoes = backupState.ultimasExecucoes || [];
+  const ultimaExecucao = ultimasExecucoes[0] || null;
+
+  const totalMidiasIgnoradas = [...clientConversations, ...groupConversations]
+    .flatMap(c => c.messages || [])
+    .filter(m => m.mediaBackupStatus === "ignorado_tamanho" || m.mediaBackupStatus === "arquivo_nao_encontrado")
+    .length;
+
+  res.json({
+    sucesso: true,
+    mesesSalvos: backupState.mesesSalvos || [],
+    mesesMidiaCompleta: backupState.mesesMidiaCompleta || [],
+    totalMidiasIgnoradas,
+    ultimaExecucao,
+    ultimasExecucoes
+  });
+});
+
 app.post("/backup/confirmar/:mes", requireBackupSecret, async (req, res) => {
   const mesChave = req.params.mes;
   if (!backupState.mesesSalvos.includes(mesChave)) {
