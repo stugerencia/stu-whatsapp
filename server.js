@@ -1319,26 +1319,10 @@ async function saveMessage({
 async function markDeletedMessage(jid, deletedWaMessageId) {
   const chat = findConversationByJid(jid);
 
-  console.log("🔎 markDeletedMessage - busca de conversa:", {
-    jidRecebido: jid,
-    conversaEncontrada: !!chat,
-    chatJid: chat?.jid || null
-  });
-
   if (!chat) return false;
 
   const rawDeletedId = extractRawMessageId(deletedWaMessageId);
   const message = chat.messages.find(m => extractRawMessageId(m.waMessageId) === rawDeletedId);
-
-  console.log("🔎 markDeletedMessage - busca de mensagem:", {
-    deletedWaMessageId,
-    rawDeletedId,
-    mensagemEncontrada: !!message,
-    ultimosWaMessageIds: chat.messages.slice(-5).map(m => ({
-      waMessageId: m.waMessageId,
-      rawId: extractRawMessageId(m.waMessageId)
-    }))
-  });
 
   if (message) {
     // Idempotência: se a mensagem já foi marcada como apagada (ex: pelo atendente
@@ -3580,7 +3564,7 @@ app.post("/apagar-mensagem", authenticateToken, async (req, res) => {
     const message = conversa.messages.find(m => m.waMessageId === waMessageId);
 
     const atendenteResponsavel =
-      conversa.attendant || req.user?.name || "Sistema";
+      req.user?.name || conversa.attendant || "Sistema";
 
     if (message) {
       message.deletedInWhatsApp = true;
