@@ -66,9 +66,17 @@ async function loadBackupState() {
   try {
     await ensureDirs();
     const raw = await fs.readFile(BACKUP_STATE_FILE, "utf-8");
-    backupState = JSON.parse(raw);
+    const dadosSalvos = JSON.parse(raw);
+    // Mescla com os valores padrão em vez de substituir tudo — arquivos
+    // salvos por uma versão anterior do sistema podem não ter todos os
+    // campos que a versão atual espera (ex: mesesMidiaCompleta não existia
+    // antes do backup de mídia ser implementado).
+    backupState = {
+      mesesSalvos: dadosSalvos.mesesSalvos || [],
+      mesesMidiaCompleta: dadosSalvos.mesesMidiaCompleta || []
+    };
   } catch {
-    backupState = { mesesSalvos: [] };
+    backupState = { mesesSalvos: [], mesesMidiaCompleta: [] };
   }
 }
 
