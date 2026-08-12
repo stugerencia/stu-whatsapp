@@ -75,12 +75,14 @@ async function loadBackupState() {
     // salvos por uma versão anterior do sistema podem não ter todos os
     // campos que a versão atual espera (ex: mesesMidiaCompleta não existia
     // antes do backup de mídia ser implementado).
-    backupState = {
+   backupState = {
       mesesSalvos: dadosSalvos.mesesSalvos || [],
-      mesesMidiaCompleta: dadosSalvos.mesesMidiaCompleta || []
+      mesesMidiaCompleta: dadosSalvos.mesesMidiaCompleta || [],
+      ultimaVerificacao: dadosSalvos.ultimaVerificacao || null,
+      ultimasExecucoes: dadosSalvos.ultimasExecucoes || []
     };
   } catch {
-    backupState = { mesesSalvos: [], mesesMidiaCompleta: [] };
+    backupState = { mesesSalvos: [], mesesMidiaCompleta: [], ultimaVerificacao: null, ultimasExecucoes: [] };
   }
 }
 
@@ -2626,16 +2628,27 @@ app.get("/backup/midias/:mes", requireBackupSecret, async (req, res) => {
 // diagnóstico sem crescer indefinidamente.
 app.post("/backup/log-execucao", requireBackupSecret, async (req, res) => {
   const { sucesso, mesProcessado, midiasIgnoradasCount, erro } = req.body || {};
+  const agora = new Date().toISOString();
 
-  backupState.ultimasExecucoes = backupState.ultimasExecucoes || [];
-  backupState.ultimasExecucoes.unshift({
-    data: new Date().toISOString(),
-    sucesso: sucesso !== false,
-    mesProcessado: mesProcessado || null,
-    midiasIgnoradasCount: midiasIgnoradasCount || 0,
-    erro: erro || null
-  });
-  backupState.ultimasExecucoes = backupState.ultimasExecucoes.slice(0, 30);
+  // Sempre atualiza — usada para saber se o mecanismo automático ainda está
+  // rodando periodicamente, mesmo em chamadas que não tinham nada pendente.
+  backupState.ultimaVerificacao = { data: agora, sucesso: sucesso !== false };
+
+  // Só entra no histórico visível quando há algo relevante: um mês
+  // processado de verdade, ou um erro — evita poluir a tabela com
+  // execuções de rotina que não encontraram nada pendente.
+  const relevante = (mesProcessado !== null && mesProcessado !== undefined) || sucesso === false;
+  if (relevante) {
+    backupState.ultimasExecucoes = backupState.ultimasExecucoes || [];
+    backupState.ultimasExecucoes.unshift({
+      data: agora,
+      sucesso: sucesso !== false,
+      mesProcessado: mesProcessado || null,
+      midiasIgnoradasCount: midiasIgnoradasCount || 0,
+      erro: erro || null
+    });
+    backupState.ultimasExecucoes = backupState.ultimasExecucoes.slice(0, 30);
+  }
 
   await saveBackupState();
   res.json({ sucesso: true });
@@ -2643,7 +2656,7 @@ app.post("/backup/log-execucao", requireBackupSecret, async (req, res) => {
 
 app.get("/backup/status", authenticateToken, (req, res) => {
   const ultimasExecucoes = backupState.ultimasExecucoes || [];
-  const ultimaExecucao = ultimasExecucoes[0] || null;
+  const ultimaVerificacao = backupState.ultimaVerificacao || null;
 
   const totalMidiasIgnoradas = [...clientConversations, ...groupConversations]
     .flatMap(c => c.messages || [])
@@ -2655,7 +2668,7 @@ app.get("/backup/status", authenticateToken, (req, res) => {
     mesesSalvos: backupState.mesesSalvos || [],
     mesesMidiaCompleta: backupState.mesesMidiaCompleta || [],
     totalMidiasIgnoradas,
-    ultimaExecucao,
+    ultimaVerificacao,
     ultimasExecucoes
   });
 });
