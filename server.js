@@ -49,6 +49,96 @@ const WAHA_URL =
   process.env.WAHA_URL || "https://devlikeaprowaha-production-8839.up.railway.app";
 const WAHA_SESSION = process.env.WAHA_SESSION || "default";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
+
+// Controle de backups mensais
+const BACKUP_STATE_FILE = path.join(DATA_DIR, "backup_state.json");
+let backupState = {
+  mesesSalvos: [] // ["2026-01", "2026-02", ...]
+};
+
+async function loadBackupState() {
+  try {
+    await ensureDirs();
+    const raw = await fs.readFile(BACKUP_STATE_FILE, "utf-8");
+    backupState = JSON.parse(raw);
+  } catch {
+    backupState = { mesesSalvos: [] };
+  }
+}
+
+async function saveBackupState() {
+  try {
+    await ensureDirs();
+    await fs.writeFile(BACKUP_STATE_FILE, JSON.stringify(backupState, null, 2));
+  } catch (error) {
+    console.error("Erro ao salvar estado de backup:", error);
+  }
+}
+
+// Gera a lista de meses (formato "AAAA-MM") desde o primeiro mês com dado
+// registrado até o mês atual, que ainda não constam em backupState.mesesSalvos.
+function calcularMesesPendentes() {
+  const todasMensagens = [...clientConversations, ...groupConversations]
+    .flatMap(c => c.messages || []);
+
+  if (todasMensagens.length === 0) return [];
+
+  const datas = todasMensagens
+    .map(m => new Date(m.date || m.sentAt || 0))
+    .filter(d => !isNaN(d.getTime()));
+
+  if (datas.length === 0) return [];
+
+  const primeira = new Date(Math.min(...datas.map(d => d.getTime())));
+  const agora = new Date();
+
+  const pendentes = [];
+  const cursor = new Date(primeira.getFullYear(), primeira.getMonth(), 1);
+  const limite = new Date(agora.getFullYear(), agora.getMonth(), 1);
+
+  while (cursor <= limite) {
+    const chave = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    if (!backupState.mesesSalvos.includes(chave)) {
+      pendentes.push(chave);
+    }
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return pendentes;
+}
+
+// Monta o dump de mensagens de um mês específico ("AAAA-MM"), de todas as
+// conversas (clientes e grupos), incluindo o nome de exibição da conversa.
+function montarDumpDoMes(mesChave) {
+  const [ano, mes] = mesChave.split("-").map(Number);
+  const inicio = new Date(ano, mes - 1, 1).getTime();
+  const fim = new Date(ano, mes, 1).getTime();
+
+  const resultado = [];
+
+  for (const conversa of [...clientConversations, ...groupConversations]) {
+    const mensagensDoMes = (conversa.messages || []).filter(m => {
+      const t = new Date(m.date || m.sentAt || 0).getTime();
+      return t >= inicio && t < fim;
+    });
+
+    if (mensagensDoMes.length > 0) {
+      resultado.push({
+        jid: conversa.jid,
+        nome: conversa.clientName || conversa.name || conversa.jid,
+        telefone: conversa.realPhone || conversa.telefone || null,
+        mensagens: mensagensDoMes
+      });
+    }
+  }
+
+  return {
+    mes: mesChave,
+    geradoEm: new Date().toISOString(),
+    conversas: resultado
+  };
+}
 
 async function startWahaSessionWithStore() {
   try {
@@ -2408,6 +2498,44 @@ app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
 
+// Middleware simples: exige a chave secreta de backup no header, em vez do
+// JWT de usuário normal — quem chama essas rotas é a função de backend do
+// Base44, não um atendente logado.
+function requireBackupSecret(req, res, next) {
+  if (!BACKUP_SECRET) {
+    return res.status(500).json({ sucesso: false, erro: "BACKUP_SECRET não configurado no servidor" });
+  }
+  const chave = req.headers["x-backup-secret"];
+  if (chave !== BACKUP_SECRET) {
+    return res.status(403).json({ sucesso: false, erro: "Chave de backup inválida" });
+  }
+  next();
+}
+
+app.get("/backup/pendentes", requireBackupSecret, (req, res) => {
+  const pendentes = calcularMesesPendentes();
+  res.json({ sucesso: true, pendentes });
+});
+
+app.get("/backup/dump/:mes", requireBackupSecret, (req, res) => {
+  const mesChave = req.params.mes;
+  if (!/^\d{4}-\d{2}$/.test(mesChave)) {
+    return res.status(400).json({ sucesso: false, erro: "Formato de mês inválido, use AAAA-MM" });
+  }
+  const dump = montarDumpDoMes(mesChave);
+  res.json({ sucesso: true, dump });
+});
+
+app.post("/backup/confirmar/:mes", requireBackupSecret, async (req, res) => {
+  const mesChave = req.params.mes;
+  if (!backupState.mesesSalvos.includes(mesChave)) {
+    backupState.mesesSalvos.push(mesChave);
+    backupState.mesesSalvos.sort();
+    await saveBackupState();
+  }
+  res.json({ sucesso: true, mesesSalvos: backupState.mesesSalvos });
+});
+
 app.get("/pesquisa-config", authenticateToken, (req, res) => {
   res.json({
     sucesso: true,
@@ -3899,6 +4027,7 @@ server.listen(PORT, async () => {
   await loadUsers();
   await ensureDefaultUsers();
   await loadSatisfaction();
+  await loadBackupState();
   await startWahaSessionWithStore();
   await sincronizarFotosChatsOverview();
 
