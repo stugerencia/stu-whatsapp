@@ -3186,16 +3186,24 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
         continue;
       }
 
+      // Em vez de bloquear o encaminhamento exigindo que o atendente assuma
+      // manualmente a conversa de destino primeiro, assume automaticamente
+      // como parte da própria ação de encaminhar (grupos já podem receber
+      // mensagens independente de status, então não passam por aqui).
       if (!canSendInConversation(conversaDestino)) {
-        resultados.push({
-          destino: conversaDestino.jid,
-          sucesso: false,
-          erro: "Conversa de destino precisa estar assumida antes do encaminhamento"
+        const atendenteForward = req.user?.name || "Sistema";
+        const eraFinalizada = conversaDestino.status === "finalizada";
+
+        conversaDestino.status = "em_atendimento";
+        conversaDestino.attendant = atendenteForward;
+        conversaDestino.openedAt = conversaDestino.openedAt || new Date().toISOString();
+        conversaDestino.openedBy = atendenteForward;
+
+        addConversationHistory(conversaDestino, eraFinalizada ? "reabriu" : "assumiu", atendenteForward, {
+          motivo: "Assumida automaticamente ao encaminhar mensagem.",
+          status: "em_atendimento"
         });
-
-        continue;
       }
-
       let chatId = toWahaChatId(conversaDestino.jid);
 
       if (!isGroupJid(chatId)) {
@@ -3231,7 +3239,7 @@ app.post("/encaminhar-mensagem", authenticateToken, async (req, res) => {
       await saveMessage({
         jid: conversaDestino.jid,
         sender: "sistema",
-        senderName: "STU Atendimento",
+        senderName: req.user?.name || "STU Atendimento",
         text: texto,
         direction: "sent",
         waMessageId: buildWahaMessageId(chatId, data),
