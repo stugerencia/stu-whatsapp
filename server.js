@@ -1827,7 +1827,16 @@ async function processarMensagemEditadaWaha(body) {
           : "editada no WhatsApp";
     }
 
-    if (newText !== null) {
+    // Preserva o texto anterior antes de sobrescrever. A comparação
+    // newText !== message.text evita duplicar entrada no histórico quando
+    // esse evento é só o eco de uma edição que já processamos via
+    // /editar-mensagem (o texto já bate, não é uma mudança nova de verdade).
+    if (newText !== null && newText !== message.text) {
+      if (!message.editHistory) message.editHistory = [];
+      message.editHistory.push({
+        text: message.text,
+        editedAt: new Date().toISOString()
+      });
       message.text = newText;
     }
     message.edited = true;
@@ -3627,6 +3636,16 @@ app.post("/editar-mensagem", authenticateToken, async (req, res) => {
     const atendenteResponsavel = req.user?.name || "Sistema";
 
     if (message) {
+      // Preserva o texto anterior antes de sobrescrever — nunca descarta o
+      // conteúdo original de uma mensagem editada, para fins de auditoria.
+      if (message.text !== novoTexto) {
+        if (!message.editHistory) message.editHistory = [];
+        message.editHistory.push({
+          text: message.text,
+          editedAt: new Date().toISOString()
+        });
+      }
+
       message.text = novoTexto;
       message.edited = true;
       message.editedAt = new Date().toISOString();
