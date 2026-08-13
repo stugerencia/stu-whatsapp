@@ -4083,7 +4083,7 @@ app.post("/admin/limpar-conversas", authenticateToken, requireAdmin, async (req,
     }
 
     if (senha !== CONFIRM_LIMPEZA_SENHA) {
-      return res.status(403).json({ sucesso: false, erro: "Senha de confirmação incorreta" });
+      return res.status(400).json({ sucesso: false, erro: "Senha de confirmação incorreta" });
     }
 
     const arquivosMedia = await fs.readdir(MEDIA_DIR).catch(() => []);
