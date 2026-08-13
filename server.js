@@ -50,6 +50,7 @@ const WAHA_URL =
 const WAHA_SESSION = process.env.WAHA_SESSION || "default";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
+const CONFIRM_LIMPEZA_SENHA = process.env.CONFIRM_LIMPEZA_SENHA || "";
 
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
 // pode ser removida do volume do Railway, para poupar espaço em disco.
@@ -4070,6 +4071,50 @@ app.post("/reagir-mensagem", authenticateToken, async (req, res) => {
       erro: "Erro ao reagir mensagem",
       detalhe: error.message
     });
+  }
+});
+
+app.post("/admin/limpar-conversas", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { senha } = req.body || {};
+
+    if (!CONFIRM_LIMPEZA_SENHA) {
+      return res.status(500).json({ sucesso: false, erro: "CONFIRM_LIMPEZA_SENHA não configurada no servidor" });
+    }
+
+    if (senha !== CONFIRM_LIMPEZA_SENHA) {
+      return res.status(403).json({ sucesso: false, erro: "Senha de confirmação incorreta" });
+    }
+
+    const arquivosMedia = await fs.readdir(MEDIA_DIR).catch(() => []);
+    for (const arquivo of arquivosMedia) {
+      await fs.unlink(path.join(MEDIA_DIR, arquivo)).catch(() => {});
+    }
+
+    clientConversations = [];
+    groupConversations = [];
+    lidToPhone = {};
+    phoneToLid = {};
+    groupNameCache = {};
+    satisfactionSentMap = {};
+    satisfactionAwaiting = {};
+    satisfactionResponses = [];
+    backupState = { mesesSalvos: [], mesesMidiaCompleta: [], ultimaVerificacao: null, ultimasExecucoes: [] };
+
+    await saveConversations();
+    await saveLidMap();
+    await saveSatisfaction();
+    await saveBackupState();
+
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      mensagem: "Conversas, mídia, mapeamento de contatos, pesquisas de satisfação e histórico de backup foram limpos. Usuários, etiquetas e mensagens rápidas foram preservados."
+    });
+  } catch (error) {
+    console.error("Erro ao limpar conversas:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
   }
 });
 
