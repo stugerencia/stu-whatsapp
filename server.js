@@ -1432,9 +1432,53 @@ async function saveMessage({
   return newMessage;
 }
 
+// ============================================================================
+// CONSULTA DE CEP (ViaCEP) — usada pelo agente de IA para confirmar endereço
+// ============================================================================
+function extrairCep(texto) {
+  if (!texto || typeof texto !== 'string') return null;
+  const match = texto.match(/\b(\d{5})-?(\d{3})\b/);
+  return match ? `${match[1]}${match[2]}` : null;
+}
+
+const cepCache = new Map();
+const CEP_TTL = 30 * 24 * 60 * 60 * 1000;
+
+async function consultarCep(cep) {
+  const digits = String(cep || '').replace(/\D/g, '');
+  if (digits.length !== 8) return null;
+
+  const cached = cepCache.get(digits);
+  if (cached && Date.now() - cached.ts < CEP_TTL) {
+    return cached.endereco;
+  }
+
+  try {
+    const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (!data || data.erro) return null;
+
+    const partes = [
+      data.logradouro,
+      data.complemento ? `(${data.complemento})` : '',
+      data.bairro,
+      `${data.localidade}/${data.uf}`,
+    ].filter(Boolean);
+    const endereco = partes.join(', ') + ` — CEP ${data.cep || digits}`;
+
+    cepCache.set(digits, { endereco, ts: Date.now() });
+    return endereco;
+  } catch {
+    return null;
+  }
+}
+
 // Envia texto pelo WAHA reaproveitando a resolução de chatId canônico —
 // mesma lógica usada na rota /enviar.
 async function sendTextViaWaha(jid, texto) {
+
   let chatId = toWahaChatId(jid);
   if (!isGroupJid(chatId)) {
     chatId = await getCanonicalChatId(chatId);
@@ -1471,6 +1515,9 @@ async function acionarAgenteIA(conversa) {
 
     const mensagemAtual = historico.length ? historico[historico.length - 1].texto : "";
 
+    const cepDetectado = extrairCep(mensagemAtual);
+    const enderecoCep = cepDetectado ? await consultarCep(cepDetectado) : null;
+
     const response = await fetch(BASE44_FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -1480,7 +1527,7 @@ async function acionarAgenteIA(conversa) {
       body: JSON.stringify({
         historico: historico.slice(0, -1),
         mensagemAtual,
-        cliente: { nome: conversa.clientName || null }
+        cliente: { nome: conversa.clientName || null, enderecoCep }
       })
     });
 
