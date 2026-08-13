@@ -51,7 +51,9 @@ const WAHA_SESSION = process.env.WAHA_SESSION || "default";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 const CONFIRM_LIMPEZA_SENHA = process.env.CONFIRM_LIMPEZA_SENHA || "";
-
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const BASE44_APP_ID = process.env.BASE44_APP_ID || "6a2c31600f18c42fb2dda146";
+const BASE44_FUNCTION_URL = `https://api.base44.com/apps/${BASE44_APP_ID}/functions/atendimentoIA`;
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
 // pode ser removida do volume do Railway, para poupar espaço em disco.
 const RETENCAO_MIDIA_LOCAL_DIAS = 180; // ~6 meses
@@ -1355,7 +1357,7 @@ async function saveMessage({
   if (waMessageId) {
    const existing = chat.messages.find(m => m.waMessageId === waMessageId);
     if (existing) {
-   return existing;
+   return { ...existing, _duplicate: true };
     }
   }
 
@@ -1431,7 +1433,98 @@ async function saveMessage({
   return newMessage;
 }
 
+// Envia texto pelo WAHA reaproveitando a resolução de chatId canônico —
+// mesma lógica usada na rota /enviar.
+async function sendTextViaWaha(jid, texto) {
+  let chatId = toWahaChatId(jid);
+  if (!isGroupJid(chatId)) {
+    chatId = await getCanonicalChatId(chatId);
+  }
+  const response = await fetch(`${WAHA_URL}/api/sendText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session: WAHA_SESSION,
+      chatId,
+      text: texto,
+      linkPreview: false
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, chatId, data };
+}
+
+// Aciona o agente de IA (Sofia) para conversas ainda não assumidas por um
+// atendente humano. Falha silenciosamente (loga e não interrompe o fluxo
+// normal) se a chamada ao Base44 ou ao WAHA der errado — nesse caso a
+// conversa segue disponível para atendimento humano normalmente.
+async function acionarAgenteIA(conversa) {
+  try {
+    if (!WEBHOOK_SECRET) {
+      console.log("⚠️ Agente IA não acionado: WEBHOOK_SECRET não configurado");
+      return;
+    }
+
+    const historico = (conversa.messages || []).slice(-30).map(m => ({
+      remetente: (m.direction === "sent" || m.from === "agent") ? "atendente" : "cliente",
+      texto: m.text || (m.mediaType && m.mediaType !== "none" ? `[${m.mediaType}]` : "")
+    }));
+
+    const mensagemAtual = historico.length ? historico[historico.length - 1].texto : "";
+
+    const response = await fetch(BASE44_FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-webhook-secret": WEBHOOK_SECRET
+      },
+      body: JSON.stringify({
+        historico: historico.slice(0, -1),
+        mensagemAtual,
+        cliente: { nome: conversa.clientName || null }
+      })
+    });
+
+    if (!response.ok) {
+      console.log("⚠️ Agente IA respondeu com erro:", response.status);
+      return;
+    }
+
+    const { resposta, sugerirHumano } = await response.json().catch(() => ({}));
+    if (!resposta) return;
+
+    const textoFinal = `*Sofia* | STU Logística\n\n${resposta}`;
+    const envio = await sendTextViaWaha(conversa.jid, textoFinal);
+
+    if (!envio.ok) {
+      console.log("⚠️ Falha ao enviar resposta da IA pelo WAHA:", envio.data);
+      return;
+    }
+
+    await saveMessage({
+      jid: conversa.jid,
+      sender: "sistema",
+      senderName: "Sofia (IA)",
+      text: textoFinal,
+      direction: "sent",
+      waMessageId: buildWahaMessageId(envio.chatId, envio.data)
+    });
+
+    if (sugerirHumano) {
+      conversa.iaSugeriuHumano = true;
+      addConversationHistory(conversa, "ia_sugeriu_atendente", "Sofia (IA)", {});
+      await saveConversations();
+      emitConversationsToConnectedUsers();
+    }
+
+    console.log("🤖 Agente IA respondeu:", { jid: conversa.jid, sugerirHumano: !!sugerirHumano });
+  } catch (error) {
+    console.error("Erro ao acionar agente IA:", error.message);
+  }
+}
+
 async function markDeletedMessage(jid, deletedWaMessageId) {
+ 
   const chat = findConversationByJid(jid);
 
   if (!chat) return false;
@@ -1670,7 +1763,7 @@ async function processarMensagemWaha(body) {
     });
   }
 
-  await saveMessage({
+  const mensagemSalva = await saveMessage({
     jid,
     sender,
     senderName,
@@ -1688,6 +1781,19 @@ async function processarMensagemWaha(body) {
   });
 
   console.log(`✅ Mensagem salva: ${isGroup ? "grupo" : "cliente"} / ${enviadaForaDoApp ? "atendente_fora_do_app" : "cliente"}${mediaType !== "none" ? ` / ${mediaType}` : ""}`);
+
+  // Aciona o agente de IA só para mensagens novas e reais de cliente,
+  // em conversas individuais ainda não assumidas por um atendente.
+  const conversaAtualizada = findConversationByJid(jid);
+  if (
+    !isGroup &&
+    !enviadaForaDoApp &&
+    !foiRespostaSatisfacao &&
+    !mensagemSalva?._duplicate &&
+    conversaAtualizada?.status === "nova"
+  ) {
+    acionarAgenteIA(conversaAtualizada);
+  }
 }
   
 async function processarMensagemApagadaWaha(body) {
