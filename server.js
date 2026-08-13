@@ -52,8 +52,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 const CONFIRM_LIMPEZA_SENHA = process.env.CONFIRM_LIMPEZA_SENHA || "";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
-const BASE44_APP_ID = process.env.BASE44_APP_ID || "6a2c31600f18c42fb2dda146";
-const BASE44_FUNCTION_URL = `https://api.base44.com/apps/${BASE44_APP_ID}/functions/atendimentoIA`;
+const BASE44_FUNCTION_URL = process.env.BASE44_FUNCTION_URL || "https://chat-stu.base44.app/functions/atendimentoIA";
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
 // pode ser removida do volume do Railway, para poupar espaço em disco.
 const RETENCAO_MIDIA_LOCAL_DIAS = 180; // ~6 meses
