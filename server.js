@@ -2936,6 +2936,8 @@ app.post("/contatos/importar/confirmar", authenticateToken, requireAdmin, async 
         existente.empresa = dados.empresa || existente.empresa;
         existente.email = dados.email || existente.email;
         existente.nomeEditadoManualmente = true;
+        addConversationHistory(existente, "importado_csv_mesclado", atendenteResponsavel, { acao });
+        atualizados++;
       } else if (acao === "mesclar") {
         if (dados.nome && !existente.clientName) {
           existente.clientName = dados.nome;
@@ -2944,10 +2946,14 @@ app.post("/contatos/importar/confirmar", authenticateToken, requireAdmin, async 
         if (dados.empresa && !existente.empresa) existente.empresa = dados.empresa;
         if (dados.email && !existente.email) existente.email = dados.email;
         existente.nomeEditadoManualmente = true;
+        addConversationHistory(existente, "importado_csv_mesclado", atendenteResponsavel, { acao });
+        atualizados++;
+      } else {
+        // Telefone repetido dentro do próprio arquivo importado (mais de
+        // uma linha com o mesmo número) — a primeira ocorrência já criou
+        // o contato; as ocorrências seguintes não fazem nada.
+        ignorados++;
       }
-
-      addConversationHistory(existente, "importado_csv_mesclado", atendenteResponsavel, { acao });
-      atualizados++;
     }
 
     await saveConversations();
