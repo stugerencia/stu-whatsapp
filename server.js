@@ -1094,6 +1094,7 @@ async function sincronizarFotosChatsOverview() {
       );
 
       if (!conversa) continue;
+      if (conversa.fotoEditadaManualmente) continue;
 
       if (conversa.profilePictureUrl !== picture) {
         conversa.profilePictureUrl = picture;
@@ -1295,12 +1296,15 @@ async function getOrCreateConversation(jid, isGroup, displayName = null) {
       attendant: null,
       unreadCount: 0,
       messages: [],
+      notas: [],
+      nomeEditadoManualmente: false,
+      fotoEditadaManualmente: false,
       createdAt: new Date().toISOString()
     };
 
     clientConversations.push(clientChat);
   } else {
-    if (displayName) {
+    if (displayName && !clientChat.nomeEditadoManualmente) {
       clientChat.name = displayName;
       clientChat.clientName = displayName;
     }
@@ -2682,6 +2686,139 @@ app.post("/transferir-conversa", authenticateToken, async (req, res) => {
 
 app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
+});
+
+// ============================================================================
+// AGENDA DE CONTATOS
+// ============================================================================
+
+// Formata uma conversa de cliente como um "contato" para a agenda —
+// reaproveita os dados que já existem na conversa em vez de duplicar estado.
+function toContato(conversa) {
+  return {
+    jid: conversa.jid,
+    nome: conversa.clientName || conversa.name || "",
+    telefone: conversa.realPhone || conversa.telefone || conversa.clientPhone || "",
+    empresa: conversa.empresa || "",
+    email: conversa.email || "",
+    fotoUrl: conversa.profilePictureUrl || conversa.avatarUrl || null,
+    nomeEditadoManualmente: !!conversa.nomeEditadoManualmente,
+    fotoEditadaManualmente: !!conversa.fotoEditadaManualmente,
+    notas: conversa.notas || [],
+    criadoEm: conversa.createdAt || null,
+    ultimaAtividade: conversa.lastMessageTime || conversa.lastMessageAt || conversa.createdAt || null
+  };
+}
+
+app.get("/contatos", authenticateToken, (req, res) => {
+  const contatos = clientConversations
+    .map(toContato)
+    .sort((a, b) => new Date(b.ultimaAtividade || 0).getTime() - new Date(a.ultimaAtividade || 0).getTime());
+
+  res.json({ sucesso: true, total: contatos.length, contatos });
+});
+
+app.get("/contato/:jid", authenticateToken, (req, res) => {
+  const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
+
+  if (!conversa || conversa.conversationType !== "cliente") {
+    return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
+  }
+
+  res.json({
+    sucesso: true,
+    contato: toContato(conversa),
+    historico: conversa.history || []
+  });
+});
+
+app.post("/contato/:jid", authenticateToken, async (req, res) => {
+  try {
+    const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
+
+    if (!conversa || conversa.conversationType !== "cliente") {
+      return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
+    }
+
+    const { nome, telefone, empresa, email } = req.body || {};
+    const atendenteResponsavel = req.user?.name || "Sistema";
+
+    // Editar o nome manualmente marca o contato como protegido — a partir
+    // daqui, mensagens novas do WhatsApp não sobrescrevem mais esse nome
+    // (ver getOrCreateConversation).
+    if (typeof nome === "string" && nome.trim() && nome.trim() !== conversa.clientName) {
+      conversa.clientName = nome.trim();
+      conversa.name = nome.trim();
+      conversa.nomeEditadoManualmente = true;
+      addConversationHistory(conversa, "editou_nome_contato", atendenteResponsavel, { novoNome: nome.trim() });
+    }
+
+    if (typeof telefone === "string" && telefone.trim()) {
+      conversa.realPhone = normalizePhone(telefone);
+      conversa.telefone = normalizePhone(telefone);
+    }
+
+    if (typeof empresa === "string") conversa.empresa = empresa.trim();
+    if (typeof email === "string") conversa.email = email.trim();
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    return res.json({ sucesso: true, contato: toContato(conversa) });
+  } catch (error) {
+    console.error("Erro ao editar contato:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+app.post("/contato/:jid/nota", authenticateToken, async (req, res) => {
+  try {
+    const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
+
+    if (!conversa || conversa.conversationType !== "cliente") {
+      return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
+    }
+
+    const { texto } = req.body || {};
+    if (!texto || !texto.trim()) {
+      return res.status(400).json({ sucesso: false, erro: "Informe o texto da nota" });
+    }
+
+    if (!conversa.notas) conversa.notas = [];
+    const nota = {
+      texto: texto.trim(),
+      autor: req.user?.name || "Sistema",
+      data: new Date().toISOString()
+    };
+    conversa.notas.push(nota);
+
+    addConversationHistory(conversa, "adicionou_nota", nota.autor, {});
+
+    await saveConversations();
+
+    return res.json({ sucesso: true, notas: conversa.notas });
+  } catch (error) {
+    console.error("Erro ao adicionar nota:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+// Exporta a agenda de contatos em CSV (compatível com Excel/Planilhas).
+app.get("/contatos/exportar", authenticateToken, (req, res) => {
+  const linhas = [["Nome", "Telefone", "Empresa", "E-mail", "Criado em", "Última atividade"]];
+
+  for (const conversa of clientConversations) {
+    const c = toContato(conversa);
+    linhas.push([c.nome, c.telefone, c.empresa, c.email, c.criadoEm || "", c.ultimaAtividade || ""]);
+  }
+
+  const csv = linhas
+    .map(linha => linha.map(campo => `"${String(campo || "").replace(/"/g, '""')}"`).join(";"))
+    .join("\n");
+
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="contatos-talky-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send("\uFEFF" + csv);
 });
 
 // Middleware simples: exige a chave secreta de backup no header, em vez do
