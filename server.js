@@ -531,7 +531,10 @@ function canSendInConversation(conversa) {
 }
 
 function getConversationListByUser(userName, role = "atendente") {
-  const conversas = getConversationList();
+  // Contatos importados sem nenhuma mensagem ainda não são "conversas" de
+  // verdade — ficam de fora do Atendimento/Kanban/Dashboard até o cliente
+  // mandar a primeira mensagem real.
+  const conversas = getConversationList().filter(c => (c.messages || []).length > 0);
 
   if (role === "admin") {
     return conversas;
@@ -2819,6 +2822,142 @@ app.get("/contatos/exportar", authenticateToken, (req, res) => {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="contatos-talky-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.send("\uFEFF" + csv);
+});
+
+// Encontra um contato existente pelo telefone, considerando as variações
+// de formato brasileiro (com/sem o nono dígito) já usadas no resto do app.
+function encontrarContatoPorTelefone(telefone) {
+  const digits = normalizePhone(telefone);
+  if (!digits) return null;
+  const variantes = getBrazilPhoneVariants(digits);
+  return clientConversations.find(c => {
+    const candidatos = [c.realPhone, c.telefone, c.clientPhone].filter(Boolean).map(normalizePhone);
+    return candidatos.some(cand => variantes.includes(cand) || getBrazilPhoneVariants(cand).some(v => variantes.includes(v)));
+  }) || null;
+}
+
+// Recebe as linhas já parseadas do CSV e classifica cada uma como "novo"
+// ou "duplicata" (telefone já existente), devolvendo os dois lados para a
+// tela de revisão decidir o que fazer.
+app.post("/contatos/importar/preview", authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const { linhas } = req.body || {};
+    if (!Array.isArray(linhas)) {
+      return res.status(400).json({ sucesso: false, erro: "Informe linhas (array)" });
+    }
+
+    const resultados = linhas.map(linha => {
+      const telefoneDigits = normalizePhone(linha.telefone || "");
+      const existente = telefoneDigits ? encontrarContatoPorTelefone(telefoneDigits) : null;
+
+      return {
+        novo: {
+          nome: (linha.nome || "").trim(),
+          telefone: telefoneDigits,
+          empresa: (linha.empresa || "").trim(),
+          email: (linha.email || "").trim(),
+        },
+        tipo: existente ? "duplicata" : "novo",
+        existente: existente ? toContato(existente) : null,
+      };
+    });
+
+    res.json({ sucesso: true, resultados });
+  } catch (error) {
+    console.error("Erro no preview de importação:", error);
+    res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+// Aplica as decisões tomadas na tela de revisão: cria contatos novos como
+// registros sem mensagens (serão reaproveitados quando o número mandar a
+// primeira mensagem real pelo WhatsApp) e resolve duplicatas conforme a
+// ação escolhida (manter_antigo / manter_novo / mesclar).
+app.post("/contatos/importar/confirmar", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { decisoes } = req.body || {};
+    if (!Array.isArray(decisoes)) {
+      return res.status(400).json({ sucesso: false, erro: "Informe decisoes (array)" });
+    }
+
+    const atendenteResponsavel = req.user?.name || "Sistema";
+    let criados = 0;
+    let atualizados = 0;
+    let ignorados = 0;
+
+    for (const decisao of decisoes) {
+      const { acao, dados } = decisao || {};
+      const telefoneDigits = normalizePhone(dados?.telefone || "");
+      if (!telefoneDigits) { ignorados++; continue; }
+
+      if (acao === "manter_antigo") {
+        ignorados++;
+        continue;
+      }
+
+      const existente = encontrarContatoPorTelefone(telefoneDigits);
+
+      if (!existente) {
+        const jid = `${telefoneDigits}@s.whatsapp.net`;
+        clientConversations.push({
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          jid,
+          whatsappId: jid,
+          lid: null,
+          name: dados.nome || telefoneDigits,
+          clientName: dados.nome || telefoneDigits,
+          clientPhone: telefoneDigits,
+          realPhone: telefoneDigits,
+          telefone: telefoneDigits,
+          phoneUnavailableReason: null,
+          profilePictureUrl: null,
+          avatarUrl: null,
+          conversationType: "cliente",
+          type: "cliente",
+          status: "nova",
+          attendant: null,
+          unreadCount: 0,
+          messages: [],
+          notas: [],
+          nomeEditadoManualmente: true,
+          fotoEditadaManualmente: false,
+          empresa: dados.empresa || "",
+          email: dados.email || "",
+          history: [{ action: "importado_csv", user: atendenteResponsavel, date: new Date().toISOString(), details: {} }],
+          createdAt: new Date().toISOString()
+        });
+        criados++;
+        continue;
+      }
+
+      if (acao === "manter_novo") {
+        existente.clientName = dados.nome || existente.clientName;
+        existente.name = existente.clientName;
+        existente.empresa = dados.empresa || existente.empresa;
+        existente.email = dados.email || existente.email;
+        existente.nomeEditadoManualmente = true;
+      } else if (acao === "mesclar") {
+        if (dados.nome && !existente.clientName) {
+          existente.clientName = dados.nome;
+          existente.name = dados.nome;
+        }
+        if (dados.empresa && !existente.empresa) existente.empresa = dados.empresa;
+        if (dados.email && !existente.email) existente.email = dados.email;
+        existente.nomeEditadoManualmente = true;
+      }
+
+      addConversationHistory(existente, "importado_csv_mesclado", atendenteResponsavel, { acao });
+      atualizados++;
+    }
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    res.json({ sucesso: true, criados, atualizados, ignorados });
+  } catch (error) {
+    console.error("Erro ao confirmar importação:", error);
+    res.status(500).json({ sucesso: false, erro: error.message });
+  }
 });
 
 // Middleware simples: exige a chave secreta de backup no header, em vez do
