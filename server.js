@@ -2613,6 +2613,83 @@ app.post("/finalizar-conversa", authenticateToken, async (req, res) => {
   }
 });
 
+// Mudança de status via arraste no Kanban — sempre silenciosa: nunca envia
+// mensagem ao cliente, nunca dispara pesquisa de satisfação (diferente de
+// /finalizar-conversa, que dispara a pesquisa 5s depois).
+app.post("/kanban/mudar-status", authenticateToken, async (req, res) => {
+  try {
+    const { jid, novoStatus, attendant } = req.body;
+
+    if (!jid || !novoStatus) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "Informe jid e novoStatus"
+      });
+    }
+
+    const statusValidos = ["nova", "em_atendimento", "finalizada"];
+    if (!statusValidos.includes(novoStatus)) {
+      return res.status(400).json({
+        sucesso: false,
+        erro: "novoStatus inválido. Use: nova, em_atendimento ou finalizada"
+      });
+    }
+
+    const conversa = getConversationList().find(c => c.jid === jid);
+
+    if (!conversa) {
+      return res.status(404).json({
+        sucesso: false,
+        erro: "Conversa não encontrada"
+      });
+    }
+
+    const statusAnterior = conversa.status;
+    const responsavel = attendant || req.user?.name || "Sistema";
+
+    if (novoStatus === "em_atendimento") {
+      conversa.status = "em_atendimento";
+      conversa.attendant = responsavel;
+      conversa.openedAt = conversa.openedAt || new Date().toISOString();
+      conversa.openedBy = responsavel;
+      conversa.unreadCount = 0;
+      conversa.messages.forEach(msg => { msg.read = true; });
+    } else if (novoStatus === "finalizada") {
+      conversa.status = "finalizada";
+      conversa.finishedAt = new Date().toISOString();
+      conversa.finishedBy = responsavel;
+      conversa.unreadCount = 0;
+      conversa.messages.forEach(msg => { msg.read = true; });
+    } else if (novoStatus === "nova") {
+      conversa.status = "nova";
+      conversa.attendant = null;
+      conversa.finishedAt = null;
+      conversa.finishedBy = null;
+    }
+
+    addConversationHistory(conversa, "mudou_status_kanban", responsavel, {
+      de: statusAnterior,
+      para: novoStatus
+    });
+
+    await saveConversations();
+    emitConversationsToConnectedUsers();
+
+    return res.json({
+      sucesso: true,
+      jid,
+      status: conversa.status
+    });
+
+  } catch (error) {
+    console.error("Erro ao mudar status via Kanban:", error);
+    return res.status(500).json({
+      sucesso: false,
+      erro: error.message
+    });
+  }
+});
+
 app.post("/transferir-conversa", authenticateToken, async (req, res) => {
   try {
     const { jid, fromAttendant, toAttendant } = req.body;
