@@ -541,14 +541,18 @@ function getConversationListByUser(userName, role = "atendente") {
   }
 
   return conversas.filter(conversa => {
+    // Grupos ficam sempre visíveis para todos os atendentes, independente
+    // de status — eles nunca são "assumidos" individualmente (mesma regra
+    // já aplicada em canSendInConversation).
     return (
+      isGroupJid(conversa.jid) ||
+      conversa.conversationType === "grupo_operacional" ||
       conversa.status === "nova" ||
       conversa.attendant === userName ||
       conversa.openedBy === userName ||
       conversa.finishedBy === userName
     );
   });
-}
 
 function emitConversationsToConnectedUsers() {
   for (const [socketId, socket] of io.sockets.sockets) {
