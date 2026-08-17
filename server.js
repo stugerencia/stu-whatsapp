@@ -553,6 +553,7 @@ function getConversationListByUser(userName, role = "atendente") {
       conversa.finishedBy === userName
     );
   });
+}
 
 function emitConversationsToConnectedUsers() {
   for (const [socketId, socket] of io.sockets.sockets) {
