@@ -3861,7 +3861,7 @@ app.post("/mapear-telefone", authenticateToken, async (req, res) => {
 
 app.post("/enviar", authenticateToken, async (req, res) => {
   try {
-    const { jid, mensagem, quotedMessage } = req.body;
+    const { jid, mensagem, quotedMessage, mentionedJids } = req.body;
 
     if (!jid || !mensagem) {
   return res.status(400).json({ sucesso: false, erro: "Informe jid e mensagem" });
@@ -3946,10 +3946,12 @@ console.log(`ENVIANDO PARA WAHA: chatId=${chatId}${quotedMessage ? " (com citaç
   reply_to: quotedMessage?.waMessageId || null,
   text: mensagem,
   linkPreview: false,
-  linkPreviewHighQuality: false
+  linkPreviewHighQuality: false,
+  ...(Array.isArray(mentionedJids) && mentionedJids.length > 0
+    ? { mentions: mentionedJids.map(m => toWahaChatId(m)) }
+    : {})
   })
 });
-
     const data = await response.json().catch(() => ({}));
   console.log(`RESPOSTA WAHA SENDTEXT: status=${response.status}`);
 
