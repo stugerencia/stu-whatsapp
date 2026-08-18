@@ -53,6 +53,7 @@ const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 const CONFIRM_LIMPEZA_SENHA = process.env.CONFIRM_LIMPEZA_SENHA || "";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
 const BASE44_FUNCTION_URL = process.env.BASE44_FUNCTION_URL || "https://chat-stu.base44.app/functions/atendimentoIA";
+const SUGESTAO_FUNCTION_URL = process.env.SUGESTAO_FUNCTION_URL || "https://chat-stu.base44.app/functions/sugestaoResposta";
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
 // pode ser removida do volume do Railway, para poupar espaço em disco.
 const RETENCAO_MIDIA_LOCAL_DIAS = 180; // ~6 meses
@@ -2829,7 +2830,7 @@ app.post("/sugestao-resposta", authenticateToken, async (req, res) => {
     const cepDetectado = extrairCep(mensagemAtual);
     const enderecoCep = cepDetectado ? await consultarCep(cepDetectado) : null;
 
-    const response = await fetch(BASE44_FUNCTION_URL, {
+        const response = await fetch(SUGESTAO_FUNCTION_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
