@@ -322,7 +322,14 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
       }
     }
 
-    const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
+        const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
+
+    // Suporte ao parâmetro {{ atendente }} no texto da pesquisa — trocado
+    // pelo nome de quem realmente atendeu essa conversa. Aceita variações
+    // de espaço dentro das chaves ({{atendente}}, {{ atendente }} etc).
+    const nomeAtendente = attendantName || conversa.attendant || "nosso atendente";
+    const textoPersonalizado = satisfactionSettings.messageText
+      .replace(/\{\{\s*atendente\s*\}\}/gi, nomeAtendente);
 
     // Enquetes (sendPoll) não funcionam de forma confiável nessa conta —
     // a engine falha silenciosamente ao decodificar votos em contatos com
@@ -335,7 +342,7 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
       body: JSON.stringify({
         session: WAHA_SESSION,
         chatId,
-        text: `${satisfactionSettings.messageText}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`,
+        text: `${textoPersonalizado}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`,
         linkPreview: false
       })
     });
