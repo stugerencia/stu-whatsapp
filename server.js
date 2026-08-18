@@ -2800,6 +2800,7 @@ function toContato(conversa) {
     nomeEditadoManualmente: !!conversa.nomeEditadoManualmente,
     fotoEditadaManualmente: !!conversa.fotoEditadaManualmente,
     iaDesativada: !!conversa.iaDesativada,
+    temConversa: (conversa.messages || []).length > 0,
     notas: conversa.notas || [],
     criadoEm: conversa.createdAt || null,
     ultimaAtividade: conversa.lastMessageTime || conversa.lastMessageAt || conversa.createdAt || null
@@ -2905,6 +2906,51 @@ app.post("/contato/:jid/nota", authenticateToken, async (req, res) => {
 });
 
 // Exporta a agenda de contatos em CSV (compatível com Excel/Planilhas).
+app.post("/abrir-conversa", authenticateToken, async (req, res) => {
+  try {
+    const { jid } = req.body || {};
+    if (!jid) {
+      return res.status(400).json({ sucesso: false, erro: "Informe o jid" });
+    }
+
+    const internalJid = toInternalPhoneJid(jid);
+    let conversa = findConversationByJid(internalJid);
+
+    if (!conversa) {
+      const nomeContato = !isGroupJid(internalJid) ? await getContactName(internalJid) : null;
+      conversa = await getOrCreateConversation(
+        internalJid,
+        isGroupJid(internalJid),
+        nomeContato || cleanJid(internalJid)
+      );
+    }
+
+    // Só reabre/assume se ainda não puder receber mensagens — uma conversa
+    // já em atendimento ou finalizada com histórico real não é alterada,
+    // só é "reaproveitada" para o atendente conseguir mandar mensagem.
+    if (!canSendInConversation(conversa)) {
+      const atendente = req.user?.name || "Sistema";
+      conversa.status = "em_atendimento";
+      conversa.attendant = atendente;
+      conversa.openedAt = conversa.openedAt || new Date().toISOString();
+      conversa.openedBy = atendente;
+      conversa.unreadCount = 0;
+
+      addConversationHistory(conversa, "criou_conversa", atendente, {
+        motivo: "Conversa aberta a partir da Agenda de Contatos."
+      });
+
+      await saveConversations();
+      emitConversationsToConnectedUsers();
+    }
+
+    return res.json({ sucesso: true, jid: conversa.jid });
+  } catch (error) {
+    console.error("Erro ao abrir conversa:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
 app.get("/contatos/exportar", authenticateToken, (req, res) => {
   const linhas = [["Nome", "Telefone", "Empresa", "E-mail", "Criado em", "Última atividade"]];
 
@@ -3887,6 +3933,12 @@ const internalJid = toInternalPhoneJid(jid);
 
 let conversa = findConversationByJid(internalJid);
 
+// Contato sem nenhuma mensagem ainda: ou é totalmente novo, ou é um
+// "contato adormecido" (importado via CSV, nunca conversou de verdade).
+// Nos dois casos, iniciar pelo "+ Nova conversa" deve abrir direto em
+// atendimento, sem exigir "assumir" manualmente antes.
+const eraContatoSemConversa = !conversa || (conversa.messages || []).length === 0;
+
 if (!conversa) {
   // Busca o nome salvo do contato na agenda do WhatsApp antes de criar a
   // conversa, para não precisar esperar a primeira resposta dele. Só se
@@ -3898,10 +3950,12 @@ if (!conversa) {
     isGroupJid(internalJid),
     nomeContato || cleanJid(internalJid)
   );
+}
 
+if (eraContatoSemConversa) {
   conversa.status = "em_atendimento";
   conversa.attendant = req.user?.name || "Sistema";
-  conversa.openedAt = new Date().toISOString();
+  conversa.openedAt = conversa.openedAt || new Date().toISOString();
   conversa.openedBy = conversa.attendant;
   conversa.unreadCount = 0;
 
