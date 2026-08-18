@@ -2742,7 +2742,9 @@ app.post("/transferir-conversa", authenticateToken, async (req, res) => {
       conversa.transfers = [];
     }
 
-    conversa.transfers.push({
+        conversa.transfers.push({
+      fromName: atendenteOrigem,
+      toName: toAttendant,
       from: atendenteOrigem,
       to: toAttendant,
       date: conversa.transferredAt
