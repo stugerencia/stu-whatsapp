@@ -2783,6 +2783,81 @@ app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
 
+// Gera uma sugestão de resposta para o atendente revisar antes de enviar —
+// reaproveita a mesma function de IA da Sofia, só que sem enviar nada
+// automaticamente. Só funciona com a conversa já assumida pelo atendente
+// (status "em_atendimento") — enquanto está "nova", quem responde é a
+// Sofia automaticamente, sem interferência dessa rota. Considera só as
+// mensagens desde a última abertura da conversa (openedAt), para não
+// misturar contexto de atendimentos antigos já finalizados.
+app.post("/sugestao-resposta", authenticateToken, async (req, res) => {
+  try {
+    const { jid } = req.body || {};
+    if (!jid) {
+      return res.status(400).json({ sucesso: false, erro: "Informe o jid" });
+    }
+
+    const conversa = findConversationByJid(jid);
+    if (!conversa) {
+      return res.status(404).json({ sucesso: false, erro: "Conversa não encontrada" });
+    }
+
+    if (conversa.status !== "em_atendimento") {
+      return res.status(409).json({ sucesso: false, erro: "Assuma a conversa antes de pedir uma sugestão de resposta." });
+    }
+
+    if (!WEBHOOK_SECRET) {
+      return res.status(500).json({ sucesso: false, erro: "IA não configurada no servidor" });
+    }
+
+    const desde = conversa.openedAt ? new Date(conversa.openedAt).getTime() : 0;
+    const mensagensRelevantes = (conversa.messages || []).filter(m => {
+      const t = new Date(m.date || m.sentAt || 0).getTime();
+      return t >= desde;
+    });
+
+    const historico = mensagensRelevantes.slice(-30).map(m => ({
+      remetente: (m.direction === "sent" || m.from === "agent") ? "atendente" : "cliente",
+      texto: m.text || (m.mediaType && m.mediaType !== "none" ? `[${m.mediaType}]` : "")
+    }));
+
+    if (historico.length === 0) {
+      return res.status(400).json({ sucesso: false, erro: "Sem mensagens nessa conversa para gerar sugestão" });
+    }
+
+    const mensagemAtual = historico[historico.length - 1].texto;
+    const cepDetectado = extrairCep(mensagemAtual);
+    const enderecoCep = cepDetectado ? await consultarCep(cepDetectado) : null;
+
+    const response = await fetch(BASE44_FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-webhook-secret": WEBHOOK_SECRET
+      },
+      body: JSON.stringify({
+        historico: historico.slice(0, -1),
+        mensagemAtual,
+        cliente: { nome: conversa.clientName || null, enderecoCep }
+      })
+    });
+
+    if (!response.ok) {
+      return res.status(502).json({ sucesso: false, erro: "Erro ao consultar IA" });
+    }
+
+    const { resposta } = await response.json().catch(() => ({}));
+    if (!resposta) {
+      return res.status(502).json({ sucesso: false, erro: "IA não retornou sugestão" });
+    }
+
+    return res.json({ sucesso: true, sugestao: resposta });
+  } catch (error) {
+    console.error("Erro ao gerar sugestão de resposta:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
 // ============================================================================
 // AGENDA DE CONTATOS
 // ============================================================================
