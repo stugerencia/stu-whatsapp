@@ -1842,12 +1842,13 @@ async function processarMensagemWaha(body) {
 
   // Aciona o agente de IA só para mensagens novas e reais de cliente,
   // em conversas individuais ainda não assumidas por um atendente.
-  const conversaAtualizada = findConversationByJid(jid);
+    const conversaAtualizada = findConversationByJid(jid);
   if (
     !isGroup &&
     !enviadaForaDoApp &&
     !foiRespostaSatisfacao &&
     !mensagemSalva?._duplicate &&
+    !conversaAtualizada?.iaDesativada &&
     conversaAtualizada?.status === "nova"
   ) {
     acionarAgenteIA(conversaAtualizada);
@@ -2789,6 +2790,7 @@ function toContato(conversa) {
     fotoUrl: conversa.profilePictureUrl || conversa.avatarUrl || null,
     nomeEditadoManualmente: !!conversa.nomeEditadoManualmente,
     fotoEditadaManualmente: !!conversa.fotoEditadaManualmente,
+    iaDesativada: !!conversa.iaDesativada,
     notas: conversa.notas || [],
     criadoEm: conversa.createdAt || null,
     ultimaAtividade: conversa.lastMessageTime || conversa.lastMessageAt || conversa.createdAt || null
@@ -2825,7 +2827,7 @@ app.post("/contato/:jid", authenticateToken, async (req, res) => {
       return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
     }
 
-    const { nome, telefone, empresa, email } = req.body || {};
+        const { nome, telefone, empresa, email, iaDesativada } = req.body || {};
     const atendenteResponsavel = req.user?.name || "Sistema";
 
     // Editar o nome manualmente marca o contato como protegido — a partir
@@ -2845,6 +2847,11 @@ app.post("/contato/:jid", authenticateToken, async (req, res) => {
 
     if (typeof empresa === "string") conversa.empresa = empresa.trim();
     if (typeof email === "string") conversa.email = email.trim();
+
+    if (typeof iaDesativada === "boolean" && iaDesativada !== !!conversa.iaDesativada) {
+      conversa.iaDesativada = iaDesativada;
+      addConversationHistory(conversa, iaDesativada ? "desativou_ia_contato" : "reativou_ia_contato", atendenteResponsavel, {});
+    }
 
     await saveConversations();
     emitConversationsToConnectedUsers();
