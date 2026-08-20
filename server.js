@@ -2953,8 +2953,11 @@ app.post("/contato/:jid/nota", authenticateToken, async (req, res) => {
   try {
     const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
 
-    if (!conversa || conversa.conversationType !== "cliente") {
-      return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
+    // Não restringe mais a conversas do tipo "cliente" — essa rota também é
+    // usada pela Anotação Interna do ChatPanel, que precisa funcionar em
+    // conversas de grupo também, não só na Agenda de Contatos.
+    if (!conversa) {
+      return res.status(404).json({ sucesso: false, erro: "Conversa não encontrada" });
     }
 
     const { texto } = req.body || {};
