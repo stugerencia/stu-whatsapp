@@ -535,9 +535,8 @@ function canSendInConversation(conversa) {
     return true;
   }
 
-  return conversa.status === "em_atendimento";
+  return conversa.status === "em_atendimento" || conversa.status === "aguardando_retorno";
 }
-
 function getConversationListByUser(userName, role = "atendente") {
   // Contatos importados sem nenhuma mensagem ainda não são "conversas" de
   // verdade — ficam de fora do Atendimento/Kanban/Dashboard até o cliente
@@ -1816,7 +1815,7 @@ async function processarMensagemWaha(body) {
   // de pesquisa de satisfação também não reabre.
   const isEcoDaPropriaApi = payload.fromMe === true && payload.source === "api";
 
-  if (!isGroup && !isEcoDaPropriaApi && !foiRespostaSatisfacao && conversaRecebida.status === "finalizada") {
+    if (!isGroup && !isEcoDaPropriaApi && !foiRespostaSatisfacao && conversaRecebida.status === "finalizada") {
     conversaRecebida.status = "nova";
     conversaRecebida.attendant = null;
     conversaRecebida.finishedAt = null;
@@ -1826,6 +1825,15 @@ async function processarMensagemWaha(body) {
       motivo: enviadaForaDoApp
         ? "Mensagem enviada pelo atendente fora do app."
         : "Nova mensagem recebida."
+    });
+  }
+
+  if (!isGroup && !isEcoDaPropriaApi && !foiRespostaSatisfacao && conversaRecebida.status === "aguardando_retorno") {
+    conversaRecebida.status = "em_atendimento";
+    fecharPeriodoAguardandoRetorno(conversaRecebida);
+
+    addConversationHistory(conversaRecebida, "retornou_do_aguardando", "Sistema", {
+      motivo: "Cliente respondeu."
     });
   }
 
@@ -2641,11 +2649,11 @@ app.post("/kanban/mudar-status", authenticateToken, async (req, res) => {
       });
     }
 
-    const statusValidos = ["nova", "em_atendimento", "finalizada"];
+        const statusValidos = ["nova", "em_atendimento", "aguardando_retorno", "finalizada"];
     if (!statusValidos.includes(novoStatus)) {
       return res.status(400).json({
         sucesso: false,
-        erro: "novoStatus inválido. Use: nova, em_atendimento ou finalizada"
+        erro: "novoStatus inválido. Use: nova, em_atendimento, aguardando_retorno ou finalizada"
       });
     }
 
@@ -2661,24 +2669,41 @@ app.post("/kanban/mudar-status", authenticateToken, async (req, res) => {
     const statusAnterior = conversa.status;
     const responsavel = attendant || req.user?.name || "Sistema";
 
-    if (novoStatus === "em_atendimento") {
-      conversa.status = "em_atendimento";
-      conversa.attendant = responsavel;
-      conversa.openedAt = conversa.openedAt || new Date().toISOString();
-      conversa.openedBy = responsavel;
-      conversa.unreadCount = 0;
-      conversa.messages.forEach(msg => { msg.read = true; });
-    } else if (novoStatus === "finalizada") {
-      conversa.status = "finalizada";
-      conversa.finishedAt = new Date().toISOString();
-      conversa.finishedBy = responsavel;
-      conversa.unreadCount = 0;
-      conversa.messages.forEach(msg => { msg.read = true; });
-    } else if (novoStatus === "nova") {
-      conversa.status = "nova";
-      conversa.attendant = null;
-      conversa.finishedAt = null;
-      conversa.finishedBy = null;
+    if (novoStatus === "aguardando_retorno") {
+      if (!ultimaMensagemFoiDoAtendenteHumano(conversa)) {
+        return res.status(409).json({
+          sucesso: false,
+          erro: "Só é possível marcar como Aguardando retorno depois de responder ao cliente."
+        });
+      }
+      conversa.status = "aguardando_retorno";
+      conversa.aguardandoRetornoDesde = new Date().toISOString();
+      if (!conversa.aguardandoRetornoPeriods) conversa.aguardandoRetornoPeriods = [];
+      conversa.aguardandoRetornoPeriods.push({ inicio: conversa.aguardandoRetornoDesde, fim: null });
+    } else {
+      if (statusAnterior === "aguardando_retorno") {
+        fecharPeriodoAguardandoRetorno(conversa);
+      }
+
+      if (novoStatus === "em_atendimento") {
+        conversa.status = "em_atendimento";
+        conversa.attendant = responsavel;
+        conversa.openedAt = conversa.openedAt || new Date().toISOString();
+        conversa.openedBy = responsavel;
+        conversa.unreadCount = 0;
+        conversa.messages.forEach(msg => { msg.read = true; });
+      } else if (novoStatus === "finalizada") {
+        conversa.status = "finalizada";
+        conversa.finishedAt = new Date().toISOString();
+        conversa.finishedBy = responsavel;
+        conversa.unreadCount = 0;
+        conversa.messages.forEach(msg => { msg.read = true; });
+      } else if (novoStatus === "nova") {
+        conversa.status = "nova";
+        conversa.attendant = null;
+        conversa.finishedAt = null;
+        conversa.finishedBy = null;
+      }
     }
 
     addConversationHistory(conversa, "mudou_status_kanban", responsavel, {
@@ -2783,6 +2808,85 @@ app.post("/transferir-conversa", authenticateToken, async (req, res) => {
 app.get("/lid-map", (req, res) => {
   res.json({ lidToPhone, phoneToLid, groupNameCache });
 });
+
+// ============================================================================
+// AGUARDANDO RETORNO — conversas sem resposta do cliente
+// ============================================================================
+const TEMPO_AGUARDANDO_RETORNO_MS = 20 * 60 * 1000; // 20 minutos
+const TEMPO_AUTOFINALIZAR_AGUARDANDO_MS = 24 * 60 * 60 * 1000; // 24 horas
+
+// Verdadeiro só quando quem mandou a última mensagem foi um atendente
+// HUMANO — mensagens da Sofia também usam direction "sent", então
+// precisamos excluir explicitamente pelo senderName dela.
+function ultimaMensagemFoiDoAtendenteHumano(conversa) {
+  const ultima = conversa.messages[conversa.messages.length - 1];
+  if (!ultima) return false;
+  return ultima.direction === "sent" && ultima.senderName !== "Sofia (IA)";
+}
+
+// Fecha o período aberto de "aguardando retorno" (se houver), marcando o
+// horário de saída — usado tanto quando o cliente responde quanto quando o
+// atendente move a conversa manualmente pra outro status.
+function fecharPeriodoAguardandoRetorno(conversa) {
+  if (!conversa.aguardandoRetornoPeriods) return;
+  const aberto = conversa.aguardandoRetornoPeriods.find(p => !p.fim);
+  if (aberto) aberto.fim = new Date().toISOString();
+}
+
+// Roda a cada minuto: move conversas em_atendimento pra aguardando_retorno
+// quando a última mensagem foi de um atendente humano (nunca da Sofia) e o
+// cliente não respondeu em 20 minutos; finaliza automaticamente e em
+// silêncio (sem pesquisa de satisfação, sem mensagem ao cliente) quem já
+// está aguardando há 24h. Só afeta clientConversations — nunca toca em
+// grupos.
+async function verificarConversasAguardandoRetorno() {
+  try {
+    let alterouAlgo = false;
+    const agora = Date.now();
+
+    for (const conversa of clientConversations) {
+      if (isGroupJid(conversa.jid)) continue;
+
+      if (conversa.status === "em_atendimento") {
+        const ultimaMensagem = conversa.messages[conversa.messages.length - 1];
+        if (!ultimaMensagem) continue;
+        if (!ultimaMensagemFoiDoAtendenteHumano(conversa)) continue;
+
+        const tempoDesde = agora - new Date(ultimaMensagem.date || ultimaMensagem.sentAt || 0).getTime();
+
+        if (tempoDesde >= TEMPO_AGUARDANDO_RETORNO_MS) {
+          conversa.status = "aguardando_retorno";
+          conversa.aguardandoRetornoDesde = new Date().toISOString();
+          if (!conversa.aguardandoRetornoPeriods) conversa.aguardandoRetornoPeriods = [];
+          conversa.aguardandoRetornoPeriods.push({ inicio: conversa.aguardandoRetornoDesde, fim: null });
+          addConversationHistory(conversa, "entrou_aguardando_retorno", "Sistema", {
+            motivo: "Sem resposta do cliente após 20 minutos"
+          });
+          alterouAlgo = true;
+        }
+      } else if (conversa.status === "aguardando_retorno") {
+        const desde = conversa.aguardandoRetornoDesde ? new Date(conversa.aguardandoRetornoDesde).getTime() : agora;
+        if (agora - desde >= TEMPO_AUTOFINALIZAR_AGUARDANDO_MS) {
+          conversa.status = "finalizada";
+          conversa.finishedAt = new Date().toISOString();
+          conversa.finishedBy = "Sistema";
+          fecharPeriodoAguardandoRetorno(conversa);
+          addConversationHistory(conversa, "finalizou_automaticamente", "Sistema", {
+            motivo: "Sem resposta do cliente por 24 horas em Aguardando retorno"
+          });
+          alterouAlgo = true;
+        }
+      }
+    }
+
+    if (alterouAlgo) {
+      await saveConversations();
+      emitConversationsToConnectedUsers();
+    }
+  } catch (error) {
+    console.error("Erro ao verificar conversas aguardando retorno:", error);
+  }
+}
 
 // Gera uma sugestão de resposta para o atendente revisar antes de enviar —
 // reaproveita a mesma function de IA da Sofia, só que sem enviar nada
@@ -4989,6 +5093,9 @@ setInterval(() => {
   sincronizarFotosChatsOverview();
 }, 30 * 60 * 1000);
 
+setInterval(() => {
+  verificarConversasAguardandoRetorno();
+}, 60 * 1000);
 // Roda a limpeza de mídia local uma vez por dia (com um atraso inicial de
 // 1 minuto após o boot, para não competir com a inicialização da sessão WAHA).
 setTimeout(() => {
