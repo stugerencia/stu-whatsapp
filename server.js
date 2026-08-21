@@ -2102,6 +2102,46 @@ app.get("/download/:fileName", async (req, res) => {
   }
 });
 
+app.get("/politica-de-privacidade", (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Política de Privacidade — Talky / STU Logística</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #1f2937; }
+          h1 { font-size: 22px; }
+          h2 { font-size: 16px; margin-top: 28px; }
+          p { font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <h1>Política de Privacidade — Talky / STU Logística</h1>
+        <p><em>Última atualização: 21 de agosto de 2026</em></p>
+        <p>A STU Logística ("nós") respeita a privacidade dos usuários que interagem com nossos canais de atendimento, incluindo WhatsApp, Instagram e outros meios de comunicação digital.</p>
+
+        <h2>1. Dados que coletamos</h2>
+        <p>Ao entrar em contato conosco, podemos coletar: nome, número de telefone, informações de perfil público (como nome de exibição e foto, quando disponíveis pela plataforma de mensagens), e o conteúdo das mensagens trocadas durante o atendimento.</p>
+
+        <h2>2. Finalidade do uso dos dados</h2>
+        <p>Utilizamos esses dados exclusivamente para prestar atendimento ao cliente, responder solicitações, acompanhar entregas e melhorar a qualidade do nosso serviço.</p>
+
+        <h2>3. Compartilhamento de dados</h2>
+        <p>Não vendemos nem compartilhamos seus dados pessoais com terceiros para fins de marketing. Os dados podem ser processados por prestadores de serviço que nos auxiliam na operação do atendimento (como provedores de infraestrutura tecnológica), sempre sob obrigações de confidencialidade.</p>
+
+        <h2>4. Retenção de dados</h2>
+        <p>Mantemos o histórico de conversas pelo tempo necessário para fins de atendimento e obrigações legais, com backups mantidos por até 18 meses.</p>
+
+        <h2>5. Seus direitos</h2>
+        <p>Você pode solicitar a qualquer momento a confirmação, correção ou exclusão dos seus dados pessoais, entrando em contato pelo e-mail contato@samutransportes.com.br.</p>
+
+        <h2>6. Contato</h2>
+        <p>Em caso de dúvidas sobre esta política, entre em contato: contato@samutransportes.com.br.</p>
+      </body>
+    </html>
+  `);
+});
+
 app.get("/status", (req, res) => {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const reconnectCount24h = reconnectionTimestamps.filter(t => t > cutoff).length;
