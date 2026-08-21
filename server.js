@@ -52,6 +52,9 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const BACKUP_SECRET = process.env.BACKUP_SECRET || "";
 const CONFIRM_LIMPEZA_SENHA = process.env.CONFIRM_LIMPEZA_SENHA || "";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID || "";
+const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET || "";
+const INSTAGRAM_REDIRECT_URI = process.env.INSTAGRAM_REDIRECT_URI || "https://stu-whatsapp-production.up.railway.app/auth/instagram/callback";
 const BASE44_FUNCTION_URL = process.env.BASE44_FUNCTION_URL || "https://chat-stu.base44.app/functions/atendimentoIA";
 const SUGESTAO_FUNCTION_URL = process.env.SUGESTAO_FUNCTION_URL || "https://chat-stu.base44.app/functions/sugestaoResposta";
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
@@ -1452,6 +1455,32 @@ async function saveMessage({
 }
 
 // ============================================================================
+// INTEGRAÇÃO INSTAGRAM (Business Login para Instagram) — tokens de acesso
+// ============================================================================
+const INSTAGRAM_TOKENS_FILE = path.join(DATA_DIR, "instagram_tokens.json");
+let instagramTokens = {}; // instagramUserId -> { username, accessToken, tokenType, expiresInSeconds, obtidoEm }
+
+async function loadInstagramTokens() {
+  try {
+    await ensureDirs();
+    const raw = await fs.readFile(INSTAGRAM_TOKENS_FILE, "utf-8");
+    instagramTokens = JSON.parse(raw);
+    console.log("Tokens do Instagram carregados:", Object.keys(instagramTokens).length);
+  } catch {
+    instagramTokens = {};
+  }
+}
+
+async function saveInstagramTokens() {
+  try {
+    await ensureDirs();
+    await fs.writeFile(INSTAGRAM_TOKENS_FILE, JSON.stringify(instagramTokens, null, 2));
+  } catch (error) {
+    console.error("Erro ao salvar tokens do Instagram:", error);
+  }
+}
+
+// ============================================================================
 // CONSULTA DE CEP (ViaCEP) — usada pelo agente de IA para confirmar endereço
 // ============================================================================
 function extrairCep(texto) {
@@ -2137,9 +2166,132 @@ app.get("/politica-de-privacidade", (req, res) => {
 
         <h2>6. Contato</h2>
         <p>Em caso de dúvidas sobre esta política, entre em contato: contato@samutransportes.com.br.</p>
-      </body>
+            </body>
     </html>
   `);
+});
+
+// Passo 1: gera o link de autorização e redireciona o navegador pra tela de
+// login/permissões do Instagram. Acesse essa rota manualmente no navegador,
+// logado com a conta que administra @stu_transporte / @jadloglafaiete.
+app.get("/auth/instagram", (req, res) => {
+  if (!INSTAGRAM_APP_ID) {
+    return res.status(500).send("INSTAGRAM_APP_ID não configurado no servidor");
+  }
+
+  const scope = [
+    "instagram_business_basic",
+    "instagram_business_manage_messages"
+  ].join(",");
+
+  const authUrl =
+    `https://www.instagram.com/oauth/authorize` +
+    `?client_id=${encodeURIComponent(INSTAGRAM_APP_ID)}` +
+    `&redirect_uri=${encodeURIComponent(INSTAGRAM_REDIRECT_URI)}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent(scope)}`;
+
+  res.redirect(authUrl);
+});
+
+// Passo 2: a Meta redireciona pra cá com ?code=... depois da autorização.
+// Troca o code por um token de curta duração, troca esse token por um de
+// longa duração (60 dias) e salva em instagram_tokens.json.
+app.get("/auth/instagram/callback", async (req, res) => {
+  try {
+    const { code, error, error_description } = req.query;
+
+    if (error) {
+      return res.status(400).send(`Autorização cancelada ou negada: ${error_description || error}`);
+    }
+
+    if (!code) {
+      return res.status(400).send("Nenhum código de autorização recebido");
+    }
+
+    const shortLivedResponse = await fetch("https://api.instagram.com/oauth/access_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: INSTAGRAM_APP_ID,
+        client_secret: INSTAGRAM_APP_SECRET,
+        grant_type: "authorization_code",
+        redirect_uri: INSTAGRAM_REDIRECT_URI,
+        code
+      })
+    });
+
+    const shortLivedData = await shortLivedResponse.json().catch(() => ({}));
+
+    if (!shortLivedResponse.ok || !shortLivedData.access_token) {
+      console.error("❌ Erro ao trocar code por token de curta duração:", shortLivedData);
+      return res.status(500).send(`Erro ao obter token: ${JSON.stringify(shortLivedData)}`);
+    }
+
+    const { access_token: shortLivedToken, user_id: userId } = shortLivedData;
+
+    const longLivedUrl =
+      `https://graph.instagram.com/access_token` +
+      `?grant_type=ig_exchange_token` +
+      `&client_secret=${encodeURIComponent(INSTAGRAM_APP_SECRET)}` +
+      `&access_token=${encodeURIComponent(shortLivedToken)}`;
+
+    const longLivedResponse = await fetch(longLivedUrl);
+    const longLivedData = await longLivedResponse.json().catch(() => ({}));
+
+    if (!longLivedResponse.ok || !longLivedData.access_token) {
+      console.error("❌ Erro ao trocar por token de longa duração:", longLivedData);
+      return res.status(500).send(`Erro ao obter token de longa duração: ${JSON.stringify(longLivedData)}`);
+    }
+
+    let username = null;
+    try {
+      const meResponse = await fetch(
+        `https://graph.instagram.com/me?fields=user_id,username,account_type&access_token=${encodeURIComponent(longLivedData.access_token)}`
+      );
+      const meData = await meResponse.json().catch(() => ({}));
+      username = meData.username || null;
+    } catch {}
+
+    instagramTokens[userId] = {
+      username,
+      accessToken: longLivedData.access_token,
+      tokenType: longLivedData.token_type || "bearer",
+      expiresInSeconds: longLivedData.expires_in || null,
+      obtidoEm: new Date().toISOString()
+    };
+
+    await saveInstagramTokens();
+
+    console.log("✅ Token do Instagram salvo:", { userId, username });
+
+    return res.send(`
+      <html>
+        <body style="font-family: Arial; padding: 40px; text-align: center;">
+          <h2>✅ Conta do Instagram conectada com sucesso!</h2>
+          <p><strong>Username:</strong> ${username || "(não identificado)"}</p>
+          <p><strong>User ID:</strong> ${userId}</p>
+          <p>O token de acesso foi salvo no servidor. Você já pode fechar esta janela.</p>
+        </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error("Erro no callback do Instagram:", error);
+    return res.status(500).send(`Erro interno: ${error.message}`);
+  }
+});
+
+// Lista as contas do Instagram já conectadas (sem expor o token completo)
+app.get("/instagram/contas", authenticateToken, requireAdmin, (req, res) => {
+  const contas = Object.entries(instagramTokens).map(([userId, dados]) => ({
+    userId,
+    username: dados.username,
+    obtidoEm: dados.obtidoEm,
+    tokenParcial: dados.accessToken ? `${dados.accessToken.slice(0, 12)}...` : null
+  }));
+
+  res.json({ sucesso: true, contas });
 });
 
 app.get("/status", (req, res) => {
@@ -5126,6 +5278,7 @@ server.listen(PORT, async () => {
   await ensureDefaultUsers();
   await loadSatisfaction();
   await loadBackupState();
+  await loadInstagramTokens();
   await startWahaSessionWithStore();
   await sincronizarFotosChatsOverview();
 
