@@ -55,6 +55,7 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
 const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID || "";
 const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET || "";
 const INSTAGRAM_REDIRECT_URI = process.env.INSTAGRAM_REDIRECT_URI || "https://stu-whatsapp-production.up.railway.app/auth/instagram/callback";
+const INSTAGRAM_VERIFY_TOKEN = process.env.INSTAGRAM_VERIFY_TOKEN || "talky_stu_verify_2026";
 const BASE44_FUNCTION_URL = process.env.BASE44_FUNCTION_URL || "https://chat-stu.base44.app/functions/atendimentoIA";
 const SUGESTAO_FUNCTION_URL = process.env.SUGESTAO_FUNCTION_URL || "https://chat-stu.base44.app/functions/sugestaoResposta";
 // Depois de quantos dias local a mídia já confirmada no backup do Drive
@@ -2279,6 +2280,37 @@ app.get("/auth/instagram/callback", async (req, res) => {
   } catch (error) {
     console.error("Erro no callback do Instagram:", error);
     return res.status(500).send(`Erro interno: ${error.message}`);
+  }
+});
+
+// Passo de verificação do webhook: a Meta manda essa requisição GET uma vez,
+// na hora de salvar a configuração, pra confirmar que o servidor é legítimo.
+app.get("/webhook/instagram", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === INSTAGRAM_VERIFY_TOKEN) {
+    console.log("✅ Webhook do Instagram verificado com sucesso");
+    return res.status(200).send(challenge);
+  }
+
+  console.log("❌ Falha na verificação do webhook do Instagram:", { mode, token });
+  return res.sendStatus(403);
+});
+
+// Recebe as notificações reais de mensagens do Instagram Direct.
+app.post("/webhook/instagram", express.json(), (req, res) => {
+  try {
+    console.log("📩 Webhook do Instagram recebido:", JSON.stringify(req.body));
+
+    // TODO: processar req.body.entry[] e integrar com saveMessage(),
+    // seguindo o mesmo padrão usado pro WAHA.
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("Erro no webhook do Instagram:", error);
+    return res.sendStatus(200); // sempre 200, senão a Meta desativa o webhook
   }
 });
 
