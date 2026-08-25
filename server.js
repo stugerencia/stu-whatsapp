@@ -1523,7 +1523,7 @@ async function buscarPerfilInstagram(igBusinessAccountId, senderId) {
     const tokenInfo = instagramTokens[igBusinessAccountId];
     if (!tokenInfo?.accessToken) return null;
 
-    const url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username&access_token=${encodeURIComponent(tokenInfo.accessToken)}`;
+    const url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(tokenInfo.accessToken)}`;
     const response = await fetch(url);
     const data = await response.json().catch(() => ({}));
 
@@ -1532,7 +1532,7 @@ async function buscarPerfilInstagram(igBusinessAccountId, senderId) {
       return null;
     }
 
-    return { name: data.name || null, username: data.username || null };
+    return { name: data.name || null, username: data.username || null, profilePic: data.profile_pic || null };
   } catch (error) {
     console.log("Erro ao buscar perfil do Instagram:", error.message);
     return null;
@@ -1561,8 +1561,8 @@ async function getOrCreateInstagramConversation(igBusinessAccountId, senderId) {
     realPhone: null,
     telefone: null,
     phoneUnavailableReason: "Contato via Instagram Direct",
-    profilePictureUrl: null,
-    avatarUrl: null,
+    profilePictureUrl: perfil?.profilePic || null,
+    avatarUrl: perfil?.profilePic || null,
     conversationType: "cliente",
     type: "cliente",
     status: "nova",
