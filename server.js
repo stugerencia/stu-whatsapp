@@ -410,7 +410,7 @@ async function capturarRespostaSatisfacao(telefone, texto) {
 }
 
 function getConversationList() {
-  return [...clientConversations, ...groupConversations].sort((a, b) => {
+  return [...clientConversations, ...groupConversations, ...instagramConversations].sort((a, b) => {
     const dateA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
     const dateB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
     return dateB - dateA;
@@ -1482,6 +1482,227 @@ async function saveInstagramTokens() {
 }
 
 // ============================================================================
+// CONVERSAS DO INSTAGRAM DIRECT
+// ============================================================================
+const INSTAGRAM_CONVERSATIONS_FILE = path.join(DATA_DIR, "instagram_conversations.json");
+let instagramConversations = [];
+
+async function loadInstagramConversations() {
+  try {
+    await ensureDirs();
+    const raw = await fs.readFile(INSTAGRAM_CONVERSATIONS_FILE, "utf-8");
+    instagramConversations = JSON.parse(raw);
+    console.log("Conversas do Instagram carregadas:", instagramConversations.length);
+  } catch {
+    instagramConversations = [];
+  }
+}
+
+async function saveInstagramConversations() {
+  try {
+    await ensureDirs();
+    await fs.writeFile(INSTAGRAM_CONVERSATIONS_FILE, JSON.stringify(instagramConversations, null, 2));
+  } catch (error) {
+    console.error("Erro ao salvar conversas do Instagram:", error);
+  }
+}
+
+// jid interno pro Instagram: "instagram:{id da conta comercial}:{id da pessoa que mandou mensagem}"
+// Isso nunca colide com os formatos do WhatsApp (@s.whatsapp.net, @lid, @g.us), então as
+// funções isGroupJid/isPhoneJid/isLidJid já usadas no resto do arquivo continuam funcionando sem alteração.
+function buildInstagramJid(igBusinessAccountId, senderId) {
+  return `instagram:${igBusinessAccountId}:${senderId}`;
+}
+
+function findInstagramConversationByJid(jid) {
+  return instagramConversations.find(c => c.jid === jid);
+}
+
+async function buscarPerfilInstagram(igBusinessAccountId, senderId) {
+  try {
+    const tokenInfo = instagramTokens[igBusinessAccountId];
+    if (!tokenInfo?.accessToken) return null;
+
+    const url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username&access_token=${encodeURIComponent(tokenInfo.accessToken)}`;
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      console.log("⚠️ Não foi possível buscar perfil do Instagram:", data);
+      return null;
+    }
+
+    return { name: data.name || null, username: data.username || null };
+  } catch (error) {
+    console.log("Erro ao buscar perfil do Instagram:", error.message);
+    return null;
+  }
+}
+
+async function getOrCreateInstagramConversation(igBusinessAccountId, senderId) {
+  const jid = buildInstagramJid(igBusinessAccountId, senderId);
+  let conversa = findInstagramConversationByJid(jid);
+
+  if (conversa) return conversa;
+
+  const perfil = await buscarPerfilInstagram(igBusinessAccountId, senderId);
+  const nomeConta = instagramTokens[igBusinessAccountId]?.username || "Instagram";
+  const displayName = perfil?.name || perfil?.username || `Instagram ${senderId}`;
+
+  conversa = {
+    id: Date.now(),
+    jid,
+    channel: "instagram",
+    igBusinessAccountId,
+    igSenderId: senderId,
+    name: displayName,
+    clientName: displayName,
+    clientPhone: null,
+    realPhone: null,
+    telefone: null,
+    phoneUnavailableReason: "Contato via Instagram Direct",
+    profilePictureUrl: null,
+    avatarUrl: null,
+    conversationType: "cliente",
+    type: "cliente",
+    status: "nova",
+    attendant: null,
+    unreadCount: 0,
+    messages: [],
+    notas: [],
+    createdAt: new Date().toISOString(),
+    contaInstagram: nomeConta
+  };
+
+  instagramConversations.push(conversa);
+  await saveInstagramConversations();
+
+  return conversa;
+}
+
+async function saveInstagramMessage({ jid, text, direction, waMessageId, mediaType = "none", mediaUrl = null }) {
+  const conversa = instagramConversations.find(c => c.jid === jid);
+  if (!conversa) return null;
+
+  if (waMessageId) {
+    const existing = conversa.messages.find(m => m.waMessageId === waMessageId);
+    if (existing) return { ...existing, _duplicate: true };
+  }
+
+  const now = new Date().toISOString();
+  const newMessage = {
+    id: Date.now(),
+    waMessageId: waMessageId || null,
+    jid,
+    sender: direction === "sent" ? "sistema" : jid,
+    senderName: direction === "sent" ? "STU Atendimento" : (conversa.clientName || "Instagram"),
+    text,
+    direction,
+    date: now,
+    sentAt: now,
+    read: direction === "sent",
+    mediaType,
+    mediaUrl,
+    mediaName: null,
+    mimeType: null,
+    fileSize: null,
+    system: false,
+    forwarded: false,
+    sentOutsideApp: false,
+    contextInfo: null,
+    deletedInWhatsApp: false,
+    preservedInSystem: true
+  };
+
+  conversa.messages.push(newMessage);
+  conversa.lastMessage = mediaType !== "none" ? `[${mediaType}]` : (text || "");
+  conversa.lastMessageText = conversa.lastMessage;
+  conversa.lastMessageAt = now;
+  conversa.lastMessageTime = now;
+
+  if (direction === "received") {
+    conversa.unreadCount = (conversa.unreadCount || 0) + 1;
+
+    if (conversa.status === "finalizada") {
+      conversa.status = "nova";
+      conversa.attendant = null;
+      conversa.finishedAt = null;
+      conversa.finishedBy = null;
+    }
+  }
+
+  await saveInstagramConversations();
+  emitConversationsToConnectedUsers();
+
+  return newMessage;
+}
+
+async function enviarMensagemInstagram(igBusinessAccountId, recipientId, texto) {
+  const tokenInfo = instagramTokens[igBusinessAccountId];
+  if (!tokenInfo?.accessToken) {
+    return { ok: false, erro: "Nenhum token salvo para essa conta do Instagram" };
+  }
+
+  const url = `https://graph.instagram.com/v21.0/${igBusinessAccountId}/messages?access_token=${encodeURIComponent(tokenInfo.accessToken)}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: { text: texto }
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, data };
+}
+
+// Processa o corpo recebido em POST /webhook/instagram
+async function processarWebhookInstagram(body) {
+  try {
+    if (body.object !== "instagram") return;
+
+    for (const entry of body.entry || []) {
+      const igBusinessAccountId = entry.id;
+
+      for (const evento of entry.messaging || []) {
+        const senderId = evento.sender?.id;
+        const recipientId = evento.recipient?.id;
+        if (!senderId || !recipientId) continue;
+
+        // Eco de mensagem que a própria conta enviou (via API ou pelo app do Instagram)
+        const enviadaPelaConta = senderId === igBusinessAccountId;
+        const outroLadoId = enviadaPelaConta ? recipientId : senderId;
+
+        const conversa = await getOrCreateInstagramConversation(igBusinessAccountId, outroLadoId);
+
+        if (evento.message?.text) {
+          await saveInstagramMessage({
+            jid: conversa.jid,
+            text: evento.message.text,
+            direction: enviadaPelaConta ? "sent" : "received",
+            waMessageId: evento.message.mid
+          });
+        } else if (evento.message?.attachments?.length > 0) {
+          const anexo = evento.message.attachments[0];
+          await saveInstagramMessage({
+            jid: conversa.jid,
+            text: "",
+            direction: enviadaPelaConta ? "sent" : "received",
+            waMessageId: evento.message.mid,
+            mediaType: anexo.type || "document",
+            mediaUrl: anexo.payload?.url || null
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Erro ao processar webhook do Instagram:", error);
+  }
+}
+
+// ============================================================================
 // CONSULTA DE CEP (ViaCEP) — usada pelo agente de IA para confirmar endereço
 // ============================================================================
 function extrairCep(texto) {
@@ -2300,12 +2521,11 @@ app.get("/webhook/instagram", (req, res) => {
 });
 
 // Recebe as notificações reais de mensagens do Instagram Direct.
-app.post("/webhook/instagram", express.json(), (req, res) => {
+app.post("/webhook/instagram", express.json(), async (req, res) => {
   try {
     console.log("📩 Webhook do Instagram recebido:", JSON.stringify(req.body));
 
-    // TODO: processar req.body.entry[] e integrar com saveMessage(),
-    // seguindo o mesmo padrão usado pro WAHA.
+    await processarWebhookInstagram(req.body);
 
     return res.sendStatus(200);
   } catch (error) {
@@ -2324,6 +2544,71 @@ app.get("/instagram/contas", authenticateToken, requireAdmin, (req, res) => {
   }));
 
   res.json({ sucesso: true, contas });
+});
+
+// Salva manualmente um token gerado pela própria tela da Meta (API Setup),
+// usado quando o token não veio pelo nosso fluxo OAuth (/auth/instagram).
+app.post("/instagram/salvar-token", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { igBusinessAccountId, username, accessToken } = req.body || {};
+
+    if (!igBusinessAccountId || !accessToken) {
+      return res.status(400).json({ sucesso: false, erro: "Informe igBusinessAccountId e accessToken" });
+    }
+
+    instagramTokens[igBusinessAccountId] = {
+      username: username || null,
+      accessToken,
+      tokenType: "manual",
+      expiresInSeconds: null,
+      obtidoEm: new Date().toISOString()
+    };
+
+    await saveInstagramTokens();
+
+    return res.json({ sucesso: true });
+  } catch (error) {
+    console.error("Erro ao salvar token do Instagram:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+// Envia uma resposta manual pra uma conversa do Instagram, usada pelo ChatPanel.
+app.post("/instagram/enviar", authenticateToken, async (req, res) => {
+  try {
+    const { jid, mensagem } = req.body || {};
+
+    if (!jid || !mensagem) {
+      return res.status(400).json({ sucesso: false, erro: "Informe jid e mensagem" });
+    }
+
+    const conversa = findInstagramConversationByJid(jid);
+    if (!conversa) {
+      return res.status(404).json({ sucesso: false, erro: "Conversa não encontrada" });
+    }
+
+    const envio = await enviarMensagemInstagram(
+      conversa.igBusinessAccountId,
+      conversa.igSenderId,
+      mensagem
+    );
+
+    if (!envio.ok) {
+      return res.status(500).json({ sucesso: false, erro: "Erro ao enviar pelo Instagram", detalhe: envio.data || envio.erro });
+    }
+
+    await saveInstagramMessage({
+      jid: conversa.jid,
+      text: mensagem,
+      direction: "sent",
+      waMessageId: envio.data?.message_id || null
+    });
+
+    return res.json({ sucesso: true, jid: conversa.jid, mensagem });
+  } catch (error) {
+    console.error("Erro ao enviar mensagem do Instagram:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
 });
 
 app.get("/status", (req, res) => {
@@ -5311,6 +5596,7 @@ server.listen(PORT, async () => {
   await loadSatisfaction();
   await loadBackupState();
   await loadInstagramTokens();
+  await loadInstagramConversations();
   await startWahaSessionWithStore();
   await sincronizarFotosChatsOverview();
 
