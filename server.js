@@ -1695,6 +1695,42 @@ async function enviarMensagemInstagram(igBusinessAccountId, recipientId, texto) 
   return { ok: response.ok, data };
 }
 
+// A API de mensagens do Instagram exige uma URL PÚBLICA pro anexo, não aceita
+// base64 direto — por isso o arquivo é salvo antes em /media (via
+// saveBufferToMedia) e a URL completa desse arquivo é o que enviamos aqui.
+function mapMediaTypeInstagram(mediaType) {
+  if (mediaType === "image") return "image";
+  if (mediaType === "video") return "video";
+  if (mediaType === "audio") return "audio";
+  return "file"; // documento e qualquer outro tipo
+}
+
+async function enviarMidiaInstagram(igBusinessAccountId, recipientId, mediaType, mediaUrlPublica) {
+  const tokenInfo = instagramTokens[igBusinessAccountId];
+  if (!tokenInfo?.accessToken) {
+    return { ok: false, erro: "Nenhum token salvo para essa conta do Instagram" };
+  }
+
+  const url = `https://graph.instagram.com/v21.0/${igBusinessAccountId}/messages?access_token=${encodeURIComponent(tokenInfo.accessToken)}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: mapMediaTypeInstagram(mediaType),
+          payload: { url: mediaUrlPublica }
+        }
+      }
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  return { ok: response.ok, data };
+}
+
 // Processa o corpo recebido em POST /webhook/instagram
 async function processarWebhookInstagram(body) {
   try {
@@ -2612,6 +2648,51 @@ app.post("/instagram/salvar-token", authenticateToken, requireAdmin, async (req,
     return res.json({ sucesso: true });
   } catch (error) {
     console.error("Erro ao salvar token do Instagram:", error);
+    return res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+// Envia um anexo (imagem/vídeo/áudio/documento) pra uma conversa do Instagram.
+app.post("/instagram/enviar-midia", authenticateToken, async (req, res) => {
+  try {
+    const { jid, mediaType, base64, mimeType, fileName, caption } = req.body || {};
+
+    if (!jid || !mediaType || !base64) {
+      return res.status(400).json({ sucesso: false, erro: "Informe jid, mediaType e base64" });
+    }
+
+    const conversa = findInstagramConversationByJid(jid);
+    if (!conversa) {
+      return res.status(404).json({ sucesso: false, erro: "Conversa não encontrada" });
+    }
+
+    const finalMimeType = mimeType || "application/octet-stream";
+    const finalFileName = fileName || `${Date.now()}.${getExtensionFromMime(finalMimeType)}`;
+    const buffer = Buffer.from(base64, "base64");
+    const savedMedia = await saveBufferToMedia(buffer, finalFileName, finalMimeType);
+
+    // URL pública completa — a API do Instagram precisa buscar o arquivo ela
+    // mesma, então não basta o caminho relativo salvo em savedMedia.mediaUrl.
+    const mediaUrlPublica = `https://stu-whatsapp-production.up.railway.app${savedMedia.mediaUrl}`;
+
+    const envio = await enviarMidiaInstagram(conversa.igBusinessAccountId, conversa.igSenderId, mediaType, mediaUrlPublica);
+
+    if (!envio.ok) {
+      return res.status(500).json({ sucesso: false, erro: "Erro ao enviar mídia pelo Instagram", detalhe: envio.data || envio.erro });
+    }
+
+    await saveInstagramMessage({
+      jid: conversa.jid,
+      text: caption || "",
+      direction: "sent",
+      waMessageId: envio.data?.message_id || null,
+      mediaType,
+      mediaUrl: savedMedia.mediaUrl
+    });
+
+    return res.json({ sucesso: true, jid: conversa.jid, mediaType, media: savedMedia });
+  } catch (error) {
+    console.error("Erro ao enviar mídia do Instagram:", error);
     return res.status(500).json({ sucesso: false, erro: error.message });
   }
 });
