@@ -340,7 +340,7 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
       .replace(/\{\{\s*atendente\s*\}\}/gi, nomeAtendente);
     const textoCompleto = `${textoPersonalizado}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`;
 
-    if (isInstagramConv) {
+        if (isInstagramConv) {
       const envio = await enviarMensagemInstagram(conversa.igBusinessAccountId, conversa.igSenderId, textoCompleto);
       if (!envio.ok) {
         console.log("⚠️ Falha ao enviar pesquisa de satisfação (Instagram):", { chaveContato, detalhe: envio.data || envio.erro });
@@ -349,7 +349,8 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
       await saveInstagramMessage({
         jid: conversa.jid,
         text: textoCompleto,
-        direction: "sent"
+        direction: "sent",
+        waMessageId: envio.data?.message_id || null
       });
     } else {
       const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
@@ -1616,7 +1617,7 @@ async function getOrCreateInstagramConversation(igBusinessAccountId, senderId) {
   return conversa;
 }
 
-async function saveInstagramMessage({ jid, text, direction, waMessageId, mediaType = "none", mediaUrl = null }) {
+async function saveInstagramMessage({ jid, text, direction, waMessageId, mediaType = "none", mediaUrl = null, skipReopen = false }) {
   const conversa = instagramConversations.find(c => c.jid === jid);
   if (!conversa) return null;
 
@@ -1656,10 +1657,10 @@ async function saveInstagramMessage({ jid, text, direction, waMessageId, mediaTy
   conversa.lastMessageAt = now;
   conversa.lastMessageTime = now;
 
-  if (direction === "received") {
+    if (direction === "received") {
     conversa.unreadCount = (conversa.unreadCount || 0) + 1;
 
-    if (conversa.status === "finalizada") {
+    if (!skipReopen && conversa.status === "finalizada") {
       conversa.status = "nova";
       conversa.attendant = null;
       conversa.finishedAt = null;
@@ -1713,15 +1714,17 @@ async function processarWebhookInstagram(body) {
 
         const conversa = await getOrCreateInstagramConversation(igBusinessAccountId, outroLadoId);
 
-                if (evento.message?.text) {
+                        if (evento.message?.text) {
+          let foiRespostaSatisfacao = false;
           if (!enviadaPelaConta) {
-            await capturarRespostaSatisfacao(conversa.jid, evento.message.text);
+            foiRespostaSatisfacao = await capturarRespostaSatisfacao(conversa.jid, evento.message.text);
           }
           await saveInstagramMessage({
             jid: conversa.jid,
             text: evento.message.text,
             direction: enviadaPelaConta ? "sent" : "received",
-            waMessageId: evento.message.mid
+            waMessageId: evento.message.mid,
+            skipReopen: foiRespostaSatisfacao
           });
         } else if (evento.message?.attachments?.length > 0) {
                   
