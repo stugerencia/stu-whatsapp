@@ -315,19 +315,22 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
     if (!satisfactionSettings.enabled) return;
     if (isGroupJid(conversa.jid)) return;
 
-    const telefone = conversa.realPhone || conversa.telefone || cleanJid(conversa.jid);
-    if (!telefone) return;
+    // Para Instagram não existe telefone — usamos o próprio jid (único por
+    // conversa) como chave de controle de cooldown/resposta pendente.
+    const isInstagramConv = conversa.channel === "instagram";
+    const chaveContato = isInstagramConv
+      ? conversa.jid
+      : (conversa.realPhone || conversa.telefone || cleanJid(conversa.jid));
+    if (!chaveContato) return;
 
-    const ultimoEnvio = satisfactionSentMap[telefone];
+    const ultimoEnvio = satisfactionSentMap[chaveContato];
     if (ultimoEnvio) {
       const diasDesde = (Date.now() - new Date(ultimoEnvio).getTime()) / (1000 * 60 * 60 * 24);
       if (diasDesde < satisfactionSettings.cooldownDays) {
-        console.log("⭐ Pesquisa de satisfação pulada (dentro do cooldown):", { telefone, diasDesde: diasDesde.toFixed(1) });
+        console.log("⭐ Pesquisa de satisfação pulada (dentro do cooldown):", { chaveContato, diasDesde: diasDesde.toFixed(1) });
         return;
       }
     }
-
-        const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
 
     // Suporte ao parâmetro {{ atendente }} no texto da pesquisa — trocado
     // pelo nome de quem realmente atendeu essa conversa. Aceita variações
@@ -335,39 +338,55 @@ async function dispararPesquisaSatisfacao(conversa, attendantName) {
     const nomeAtendente = attendantName || conversa.attendant || "nosso atendente";
     const textoPersonalizado = satisfactionSettings.messageText
       .replace(/\{\{\s*atendente\s*\}\}/gi, nomeAtendente);
+    const textoCompleto = `${textoPersonalizado}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`;
 
-    // Enquetes (sendPoll) não funcionam de forma confiável nessa conta —
-    // a engine falha silenciosamente ao decodificar votos em contatos com
-    // endereçamento @lid (bug conhecido da biblioteca por trás da engine
-    // NOWEB). Voltamos ao texto simples, com proteção por janela de tempo
-    // e telefone específico contra falsos positivos.
-    const response = await fetch(`${WAHA_URL}/api/sendText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session: WAHA_SESSION,
-        chatId,
-        text: `${textoPersonalizado}\n\nResponda com um número de 1 a 5 (1 = péssimo, 5 = ótimo).`,
-        linkPreview: false
-      })
-    });
+    if (isInstagramConv) {
+      const envio = await enviarMensagemInstagram(conversa.igBusinessAccountId, conversa.igSenderId, textoCompleto);
+      if (!envio.ok) {
+        console.log("⚠️ Falha ao enviar pesquisa de satisfação (Instagram):", { chaveContato, detalhe: envio.data || envio.erro });
+        return;
+      }
+      await saveInstagramMessage({
+        jid: conversa.jid,
+        text: textoCompleto,
+        direction: "sent"
+      });
+    } else {
+      const chatId = await getCanonicalChatId(toWahaChatId(conversa.jid));
 
-    if (!response.ok) {
-      console.log("⚠️ Falha ao enviar pesquisa de satisfação:", { telefone, status: response.status });
-      return;
+      // Enquetes (sendPoll) não funcionam de forma confiável nessa conta —
+      // a engine falha silenciosamente ao decodificar votos em contatos com
+      // endereçamento @lid (bug conhecido da biblioteca por trás da engine
+      // NOWEB). Voltamos ao texto simples, com proteção por janela de tempo
+      // e chave de contato específica contra falsos positivos.
+      const response = await fetch(`${WAHA_URL}/api/sendText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session: WAHA_SESSION,
+          chatId,
+          text: textoCompleto,
+          linkPreview: false
+        })
+      });
+
+      if (!response.ok) {
+        console.log("⚠️ Falha ao enviar pesquisa de satisfação:", { chaveContato, status: response.status });
+        return;
+      }
     }
 
     const now = new Date().toISOString();
-    satisfactionSentMap[telefone] = now;
-    satisfactionAwaiting[telefone] = {
+    satisfactionSentMap[chaveContato] = now;
+    satisfactionAwaiting[chaveContato] = {
       conversationJid: conversa.jid,
       agentName: attendantName || conversa.attendant || "Sistema",
-      clientName: conversa.clientName || conversa.name || telefone,
+      clientName: conversa.clientName || conversa.name || chaveContato,
       sentAt: now
     };
 
     await saveSatisfaction();
-    console.log("⭐ Pesquisa de satisfação enviada:", { telefone });
+    console.log("⭐ Pesquisa de satisfação enviada:", { chaveContato });
 
   } catch (error) {
     console.error("Erro ao disparar pesquisa de satisfação:", error);
@@ -1694,7 +1713,10 @@ async function processarWebhookInstagram(body) {
 
         const conversa = await getOrCreateInstagramConversation(igBusinessAccountId, outroLadoId);
 
-        if (evento.message?.text) {
+                if (evento.message?.text) {
+          if (!enviadaPelaConta) {
+            await capturarRespostaSatisfacao(conversa.jid, evento.message.text);
+          }
           await saveInstagramMessage({
             jid: conversa.jid,
             text: evento.message.text,
@@ -1702,6 +1724,7 @@ async function processarWebhookInstagram(body) {
             waMessageId: evento.message.mid
           });
         } else if (evento.message?.attachments?.length > 0) {
+                  
           const anexo = evento.message.attachments[0];
           await saveInstagramMessage({
             jid: conversa.jid,
