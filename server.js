@@ -1518,6 +1518,23 @@ function findInstagramConversationByJid(jid) {
   return instagramConversations.find(c => c.jid === jid);
 }
 
+// Encontra uma conversa por jid em QUALQUER canal (WhatsApp ou Instagram) —
+// usado por rotas genéricas que hoje só sabiam achar conversas do WhatsApp.
+function findAnyConversationByJid(jid) {
+  return findConversationByJid(jid) || findInstagramConversationByJid(jid);
+}
+
+// Salva a conversa no arquivo certo, dependendo do canal — usado por rotas
+// genéricas (assumir, finalizar, mudar status, etc) que hoje só sabiam
+// salvar conversas do WhatsApp, mesmo quando a conversa era do Instagram.
+async function saveConversationByChannel(conversa) {
+  if (conversa?.channel === "instagram") {
+    await saveInstagramConversations();
+  } else {
+    await saveConversations();
+  }
+}
+
 async function buscarPerfilInstagram(igBusinessAccountId, senderId) {
   try {
     const tokenInfo = instagramTokens[igBusinessAccountId];
@@ -3001,7 +3018,7 @@ app.post("/marcar-lida", authenticateToken, async (req, res) => {
       msg.read = true;
     });
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
 
     emitConversationsToConnectedUsers();
 
@@ -3061,7 +3078,7 @@ addConversationHistory(conversa, "assumiu", attendant, {
       msg.read = true;
     });
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
 
     emitConversationsToConnectedUsers();
 
@@ -3115,8 +3132,8 @@ app.post("/finalizar-conversa", authenticateToken, async (req, res) => {
       msg.read = true;
     });
 
-    await saveConversations();
-
+    await saveConversationByChannel(conversa);
+    
     // Espera alguns segundos antes de disparar a pesquisa — dá tempo da
     // mensagem automática de finalização (enviada pelo frontend logo após
     // esta resposta) chegar primeiro no WhatsApp, mantendo a ordem natural
@@ -3220,7 +3237,7 @@ app.post("/kanban/mudar-status", authenticateToken, async (req, res) => {
       para: novoStatus
     });
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
     emitConversationsToConnectedUsers();
 
     return res.json({
@@ -3291,8 +3308,8 @@ app.post("/transferir-conversa", authenticateToken, async (req, res) => {
       status: "em_atendimento"
     });
 
-    await saveConversations();
-
+    await saveConversationByChannel(conversa);
+    
     emitConversationsToConnectedUsers();
 
     return res.json({
@@ -3505,7 +3522,7 @@ app.get("/contatos", authenticateToken, (req, res) => {
 });
 
 app.get("/contato/:jid", authenticateToken, (req, res) => {
-  const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
+  const conversa = findAnyConversationByJid(decodeURIComponent(req.params.jid));
 
   if (!conversa || conversa.conversationType !== "cliente") {
     return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
@@ -3520,13 +3537,13 @@ app.get("/contato/:jid", authenticateToken, (req, res) => {
 
 app.post("/contato/:jid", authenticateToken, async (req, res) => {
   try {
-    const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
+    const conversa = findAnyConversationByJid(decodeURIComponent(req.params.jid));
 
     if (!conversa || conversa.conversationType !== "cliente") {
       return res.status(404).json({ sucesso: false, erro: "Contato não encontrado" });
     }
 
-        const { nome, telefone, empresa, email, iaDesativada } = req.body || {};
+    const { nome, telefone, empresa, email, iaDesativada } = req.body || {};
     const atendenteResponsavel = req.user?.name || "Sistema";
 
     // Editar o nome manualmente marca o contato como protegido — a partir
@@ -3552,7 +3569,7 @@ app.post("/contato/:jid", authenticateToken, async (req, res) => {
       addConversationHistory(conversa, iaDesativada ? "desativou_ia_contato" : "reativou_ia_contato", atendenteResponsavel, {});
     }
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
     emitConversationsToConnectedUsers();
 
     return res.json({ sucesso: true, contato: toContato(conversa) });
@@ -3564,8 +3581,8 @@ app.post("/contato/:jid", authenticateToken, async (req, res) => {
 
 app.post("/contato/:jid/nota", authenticateToken, async (req, res) => {
   try {
-    const conversa = findConversationByJid(decodeURIComponent(req.params.jid));
-
+    const conversa = findAnyConversationByJid(decodeURIComponent(req.params.jid));
+    
     // Não restringe mais a conversas do tipo "cliente" — essa rota também é
     // usada pela Anotação Interna do ChatPanel, que precisa funcionar em
     // conversas de grupo também, não só na Agenda de Contatos.
@@ -3588,7 +3605,7 @@ app.post("/contato/:jid/nota", authenticateToken, async (req, res) => {
 
     addConversationHistory(conversa, "adicionou_nota", nota.autor, {});
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
 
     return res.json({ sucesso: true, notas: conversa.notas });
   } catch (error) {
@@ -4367,7 +4384,7 @@ app.post("/adicionar-etiqueta", authenticateToken, async (req, res) => {
       tagName: tag.name
     });
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
 
     emitConversationsToConnectedUsers();
 
@@ -4414,7 +4431,7 @@ app.post("/remover-etiqueta", authenticateToken, async (req, res) => {
       tagId
     });
 
-    await saveConversations();
+    await saveConversationByChannel(conversa);
 
     emitConversationsToConnectedUsers();
 
