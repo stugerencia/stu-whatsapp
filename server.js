@@ -1926,8 +1926,7 @@ async function acionarAgenteIA(conversa) {
 // sem novas mensagens, momento em que ela já enxerga o histórico completo
 // (últimas 30 mensagens) de uma vez, numa resposta só.
 const agenteIADebounceTimers = new Map();
-const TEMPO_DEBOUNCE_AGENTE_IA_MS = 8000; // 8 segundos sem nova mensagem
-
+const TEMPO_DEBOUNCE_AGENTE_IA_MS = 60000; // 1 minuto sem nova mensagem
 function agendarAgenteIA(jid) {
   const timerExistente = agenteIADebounceTimers.get(jid);
   if (timerExistente) clearTimeout(timerExistente);
