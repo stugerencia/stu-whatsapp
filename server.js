@@ -1918,6 +1918,38 @@ async function acionarAgenteIA(conversa) {
   }
 }
 
+// Debounce por conversa: evita que a Sofia responda separadamente pra cada
+// mensagem quando o cliente manda várias seguidas (aproxima de um
+// atendimento humano e evita o padrão de rajada de respostas automáticas,
+// que pode contribuir para bloqueios antiabuso da Meta). Toda nova mensagem
+// do cliente reinicia o cronômetro — só aciona a IA depois de um período
+// sem novas mensagens, momento em que ela já enxerga o histórico completo
+// (últimas 30 mensagens) de uma vez, numa resposta só.
+const agenteIADebounceTimers = new Map();
+const TEMPO_DEBOUNCE_AGENTE_IA_MS = 8000; // 8 segundos sem nova mensagem
+
+function agendarAgenteIA(jid) {
+  const timerExistente = agenteIADebounceTimers.get(jid);
+  if (timerExistente) clearTimeout(timerExistente);
+
+  const timer = setTimeout(async () => {
+    agenteIADebounceTimers.delete(jid);
+
+    // Reconsulta o estado atual da conversa no momento do disparo — pode
+    // ter mudado durante a espera (ex: atendente assumiu, IA foi desativada).
+    const conversaAtual = findConversationByJid(jid);
+    if (
+      conversaAtual &&
+      !conversaAtual.iaDesativada &&
+      conversaAtual.status === "nova"
+    ) {
+      await acionarAgenteIA(conversaAtual);
+    }
+  }, TEMPO_DEBOUNCE_AGENTE_IA_MS);
+
+  agenteIADebounceTimers.set(jid, timer);
+}
+
 async function markDeletedMessage(jid, deletedWaMessageId) {
  
   const chat = findConversationByJid(jid);
@@ -2188,7 +2220,7 @@ async function processarMensagemWaha(body) {
 
   // Aciona o agente de IA só para mensagens novas e reais de cliente,
   // em conversas individuais ainda não assumidas por um atendente.
-    const conversaAtualizada = findConversationByJid(jid);
+        const conversaAtualizada = findConversationByJid(jid);
   if (
     !isGroup &&
     !enviadaForaDoApp &&
@@ -2197,7 +2229,7 @@ async function processarMensagemWaha(body) {
     !conversaAtualizada?.iaDesativada &&
     conversaAtualizada?.status === "nova"
   ) {
-    acionarAgenteIA(conversaAtualizada);
+    agendarAgenteIA(jid);
   }
 }
   
